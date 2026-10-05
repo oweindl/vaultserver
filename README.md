@@ -2,7 +2,19 @@
 
 Ein immer erreichbarer Ersatz für den Obsidian-MCP-Zugriff: ein MCP-Server mit schnellem Suchindex über einem Markdown-Vault, plus Web-Viewer und -Editor im Browser.
 
-**Status:** Konzeptphase – siehe [docs/KONZEPT.md](docs/KONZEPT.md).
+**Status:** Phase 1 (Kern und Index) – siehe [docs/KONZEPT.md](docs/KONZEPT.md) und [docs/HANDOFF.md](docs/HANDOFF.md).
+
+## Schnellstart
+
+```
+python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'
+cp vaultserver.example.toml vaultserver.toml   # vault_path anpassen
+.venv/bin/vaultserver index --rebuild
+.venv/bin/vaultserver search "pdf export"
+.venv/bin/vaultserver query "Status!=erledigt" "Priorität=hoch" --folder Fixliste
+.venv/bin/vaultserver read Features/34-Signatur.md --section "Stufe 2"
+.venv/bin/vaultserver bench
+```
 
 ## Idee in einem Satz
 

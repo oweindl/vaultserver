@@ -1,0 +1,2 @@
+[console_scripts]
+vaultserver = vaultserver.cli:main

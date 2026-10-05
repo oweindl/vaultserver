@@ -18,21 +18,32 @@ Diese Datei übergibt den Stand an die nächste Claude-Sitzung. Start mit: „Li
 | Name | VaultServer |
 | Eigenschaften | Alle `- Schlüssel: Wert`-Zeilen und Frontmatter-Felder (keine feste Liste) |
 | Agentenpflicht | Claude-Code-Instanzen setzen und nutzen die Eigenschaften konsequent; Server erzwingt das |
-| Zusatzfunktionen | Ideen 1–8 aus dem Konzept „klingen gut“ – Umfang final bestätigen |
+| Zusatzfunktionen | Ideen 1–8 alle im Umfang (bestätigt 2026-10-05) |
+| Host (konkret) | `webtest`, 192.168.1.32; Port 8100 frei (geprüft 2026-10-05) |
+| Obsidian | wird abgelöst, VaultServer ist einziger Schreiber |
+| Vault-Git | `oweindl/obsidian-oweindl` (privat), geklont nach `~/obsidian-oweindl`; Zugriff über `gh` (HTTPS, Konto oweindl). Achtung: `~/.ssh/id_ed25519` ist nur Deploy-Key für PDFCloud-Pro |
 | GitHub-Issues | erst nach Abschluss der Definition |
 
 ## Noch offen (Oliver)
 
-- [ ] Obsidian parallel als Editor weiterverwenden oder nicht
-- [ ] Git-Remote des Vaults und Push-Berechtigung des Servers
-- [ ] Umfang der Zusatzfunktionen 1–8 bestätigen
-- [ ] Hostname/IP des Ubuntu-Rechners; Port 8100 dort prüfen: `ss -ltnp | grep 8100`
+- [ ] Kanonische Statuswerte bestätigen (Vorschlag in `vaultserver.example.toml`, Abschnitt `[canonical]`): erledigt-ausgerollt, erledigt-abgenommen, erledigt-test, teilweise-test, behoben-pruefen, offen, geplant, entwurf, aktiv, fertig
+- [ ] Sollen Agenten künftig nur noch kanonische Werte schreiben (Details wie Commits in eigene Zeile `- Umsetzung:`)? Das wäre die Grundlage für `guide`/`lint` (Ideen 1, 6)
+
+## Stand Phase 1 (2026-10-05)
+
+- Gebaut: `src/vaultserver/` mit `parser.py` (Abschnitte, Links, Eigenschaften, Tags, Aufgaben), `index.py` (SQLite-FTS5, inkrementeller Abgleich über Prüfsummen, Link-Auflösung wie Obsidian, search/query/outline/read/backlinks/tasks/list), `cli.py`.
+- Tests: `.venv/bin/pytest` (7 grün).
+- Messung mit synthetischem Vault (250 Notizen, Dateien bis 205 KB, `scripts/make_sample_vault.py`): Neuaufbau 0,29 s, Suche Median 4,4 ms / p95 5,6 ms, Eigenschafts-Abfrage 0,4 ms.
+- Archiv (Idee 7) ist im Index schon umgesetzt: `Archiv/` nur mit `include_archive`.
+- **Echter Vault** (`~/obsidian-oweindl`, 251 Notizen, 2,7 MB Text, 45 Anhänge): Neuaufbau 0,58 s, Suche Median 2,1 ms / p95 3,2 ms, Abfrage 0,2 ms. 3 kaputte Wikilinks (`Willkommen.md` → „Neuer Link“, 2× „Aegis Aerospace“ in `Moon/`).
+- **Befund Eigenschaften:** ~1160 Schlüssel, davon 93 in ≥ 3 Notizen; Rest ist Fließtext in Aufzählungen. `Ist`/`Soll`/`Wenn unklar` sind echte Felder der Fixliste-Vorlage, deshalb kein Filter nach Position. `vaultserver keys` zeigt die Schlüssel mit Häufigkeit (Grundlage für `guide`).
+- **Befund Status:** 50 verschiedene Freitext-Werte (mit Commits, Branches, Kommentaren). Regeln unter `[canonical]` in der Konfiguration bilden sie auf 10 Werte ab; Rohtext bleibt unverändert. Offene Fixes: `vaultserver query "Status!~erledigt" --folder ContentManagementTool/Fixliste` → FIX-050, 055, 056.
 
 ## Nächste Schritte
 
-1. Offene Punkte klären, Definition abschließen.
+1. Vault-Repo klonen, `vaultserver bench` gegen den echten Vault laufen lassen.
 2. GitHub-Issues anlegen: je Phase ein Epic (Phasen 1–6), darunter je MCP-Werkzeug und je Zusatzfunktion ein Issue.
-3. Phase 1 bauen: Kern + Index; Test gegen Olivers Vault (Kopie auf surfaceold unter `Z:\oweindl`, nur über „Add folder“ erreichbar, UNC-Pfade gehen nicht) mit Messung der Suchzeiten.
+3. Phase 2: MCP-Server (FastAPI + Streamable HTTP) auf Port 8100, Lesewerkzeuge, dann Schreiben mit Versionsprüfung und Git-Commit.
 
 ## Hinweise für die nächste Sitzung
 

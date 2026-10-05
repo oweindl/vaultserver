@@ -1,0 +1,25 @@
+# Kopieren nach vaultserver.toml und anpassen.
+vault_path = "/srv/vault"
+db_path = "data/index.sqlite"
+
+# Ordner, die die Suche nur auf Wunsch einbezieht (Idee 7)
+archive_folders = ["Archiv"]
+
+# Nie indexieren
+exclude = [".git", ".obsidian", ".trash"]
+
+# Freitext-Werte auf kanonische Werte abbilden (Regex, erste passende Regel gewinnt).
+# Der Rohtext bleibt in der Datei unverändert; nur der Index nutzt den kanonischen Wert.
+[canonical]
+status = [
+  { match = "ausgerollt|^produktiv", value = "erledigt-ausgerollt" },
+  { match = "^erledigt \\(abgenommen", value = "erledigt-abgenommen" },
+  { match = "^stufe\\b.*erledigt \\(test\\)", value = "teilweise-test" },
+  { match = "^(rest\\b.*)?erledigt \\(test\\)", value = "erledigt-test" },
+  { match = "^behoben", value = "behoben-pruefen" },
+  { match = "^erledigt\\b", value = "erledigt" },
+  { match = "^(offen|geplant|entwurf|aktiv|fertig|in arbeit)\\b", value = "\\1" },
+]
+"priorität" = [
+  { match = "^(hoch|mittel|niedrig)\\b", value = "\\1" },
+]

@@ -1,0 +1,14 @@
+LICENSE
+README.md
+pyproject.toml
+src/vaultserver/cli.py
+src/vaultserver/config.py
+src/vaultserver/index.py
+src/vaultserver/parser.py
+src/vaultserver.egg-info/PKG-INFO
+src/vaultserver.egg-info/SOURCES.txt
+src/vaultserver.egg-info/dependency_links.txt
+src/vaultserver.egg-info/entry_points.txt
+src/vaultserver.egg-info/requires.txt
+src/vaultserver.egg-info/top_level.txt
+tests/test_index.py

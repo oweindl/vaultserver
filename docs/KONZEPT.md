@@ -130,7 +130,7 @@ claude mcp add --transport http vaultserver http://<ubuntu-rechner>:8100/mcp --h
 - **Betrieb:** systemd-Dienst mit Neustart bei Fehler; optional Docker. Port 8100. Konfiguration in einer Datei (Vault-Pfad, Port, Tokens, Werte-Normalisierung).
 - **Sicherheit:** nur im LAN; Bearer-Token je Rechner; Web-Oberfläche mit Anmeldung; von außen nur über VPN.
 - **Datensicherung:** regelmäßiger Push zum Git-Remote; der Index braucht keine Sicherung.
-- **Übergang:** Obsidian kann mit Obsidian-Git parallel weiterlaufen; der Datei-Wächter nimmt eingehende Änderungen auf.
+- **Übergang:** Obsidian wird abgelöst; VaultServer ist danach einziger Schreiber. Der Datei-Wächter bleibt für `git pull` und Handänderungen.
 
 ### Phasen
 
@@ -143,7 +143,7 @@ claude mcp add --transport http vaultserver http://<ubuntu-rechner>:8100/mcp --h
 
 ## Entscheidungen (2026-10-05)
 
-- Host: Ubuntu-Rechner, Port 8100 für Web, REST und MCP.
+- Host: Ubuntu-Rechner `webtest` (192.168.1.32), Port 8100 für Web, REST und MCP.
 - Name: VaultServer, Repo `oweindl/vaultserver`, MIT-Lizenz.
 - Alle `- Schlüssel: Wert`-Zeilen und Frontmatter-Felder sind Eigenschaften.
 - Die ausführenden Claude-Code-Instanzen setzen und nutzen diese Eigenschaften konsequent; der Server setzt das durch (Ideen 1 und 2).
@@ -162,6 +162,6 @@ claude mcp add --transport http vaultserver http://<ubuntu-rechner>:8100/mcp --h
 ## Offene Punkte
 
 - [ ] GitHub-Issues für Phasen und Funktionen anlegen
-- [ ] Obsidian parallel als Editor weiterverwenden oder nicht
-- [ ] Git-Remote des Vaults und Push-Berechtigung des Servers
-- [ ] Umfang der Zusatzfunktionen 1–8 final bestätigen
+- [x] Obsidian wird abgelöst; VaultServer ist einziger Schreiber
+- [x] Vault-Git: Clone/Push über SSH-Key des Hosts `webtest` (Repo-Name noch offen)
+- [x] Zusatzfunktionen 1–8 alle im Umfang
