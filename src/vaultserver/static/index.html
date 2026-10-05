@@ -22,7 +22,7 @@
     <button id="btn-recent">Änderungen</button>
     <button id="btn-tasks">Aufgaben</button>
     <button id="btn-lint">Prüfung</button>
-    <button id="btn-logout">Abmelden</button>
+    <button id="btn-account">Konto</button>
     <button id="btn-more" title="Mehr">⋯</button>
   </header>
   <main>
@@ -44,6 +44,16 @@
     <div class="err" id="login-err"></div>
   </form>
 </div>
+
+<dialog id="viewer">
+  <div class="v-head">
+    <span class="v-name" id="v-name"></span>
+    <a id="v-download" download>Herunterladen</a>
+    <a id="v-tab" target="_blank" rel="noopener">In neuem Tab</a>
+    <button id="v-close" title="Schließen (Esc)">✕</button>
+  </div>
+  <div class="v-body" id="v-body"></div>
+</dialog>
 
 <dialog id="dlg"><form method="dialog" id="dlg-form"></form></dialog>
 

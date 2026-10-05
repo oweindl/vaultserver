@@ -64,13 +64,13 @@ def render(text: str, note_path: str, resolve) -> str:
         ext = PurePosixPath(path).suffix.lower()
         url = "/api/file/" + quote(path)
         if embed and ext in IMAGE_EXT:
-            return f'<img src="{url}" alt="{html.escape(alias or target)}" loading="lazy">'
+            return f'<img src="{url}" alt="{html.escape(alias or target)}" data-file="{html.escape(path)}" loading="lazy">'
         if embed and ext in (".html", ".htm"):
             return f'<iframe class="mockup" src="{url}" sandbox="allow-scripts" loading="lazy"></iframe>'
         if embed and ext == ".pdf":
             return f'<iframe class="pdf" src="{url}" loading="lazy"></iframe>'
         if ext != ".md":
-            return f'<a class="wikilink file" href="{url}" target="_blank">{html.escape(label)}</a>'
+            return f'<a class="wikilink file" href="{url}" data-file="{html.escape(path)}">{html.escape(label)}</a>'
         anchor = f"#{_slug(section)}" if section else ""
         return (f'<a class="wikilink" href="#/note/{quote(path)}{anchor}" data-path="{html.escape(path)}">'
                 f"{html.escape(label)}</a>")

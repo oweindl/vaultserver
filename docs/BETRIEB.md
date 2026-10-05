@@ -40,13 +40,15 @@ Neues Token: `vaultserver new-token`, unter `[server.tokens]` eintragen, Dienst 
 
 ## Web-Anmeldung
 
-Benutzer stehen unter `[server.users]` als scrypt-Hash. Neues Passwort:
+Benutzer stehen unter `[server.users]` in `vaultserver.toml` als scrypt-Hash. Das Passwort ändert man in der Web-Oberfläche unter „Konto › Passwort ändern“ (mindestens 10 Zeichen). Das neue Passwort steht dann als Hash in `data/users.json` und hat Vorrang vor der Konfiguration. Die eigene Sitzung bleibt angemeldet, alle anderen Sitzungen dieses Benutzers enden. Sitzungen gelten sonst 30 Tage.
+
+Passwort vergessen: `data/users.json` löschen (dann gilt wieder der Hash aus der Konfiguration) oder einen neuen Hash erzeugen und eintragen:
 
 ```
 .venv/bin/vaultserver hash-password      # fragt das Passwort ab, gibt den Hash aus
 ```
 
-Hash in `vaultserver.toml` eintragen, Dienst neu starten. Sitzungen gelten 30 Tage.
+Danach `systemctl --user restart vaultserver`.
 
 ## Regeln und kanonische Werte
 

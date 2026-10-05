@@ -6,6 +6,7 @@ import base64
 import contextlib
 import hashlib
 import hmac
+import json
 import logging
 import mimetypes
 import secrets
@@ -57,19 +58,54 @@ def _secret(config: Config) -> bytes:
     return f.read_text().strip().encode()
 
 
-def make_session(user: str, key: bytes) -> str:
-    payload = f"{user}|{int(time.time()) + SESSION_DAYS * 86400}"
+MIN_PASSWORD = 10
+
+
+class Users:
+    """Web-Benutzer: Hashes aus der Konfiguration, im Browser geänderte Passwörter in
+    data/users.json (hat Vorrang). Sitzungen hängen am Passwort-Hash: ein neues
+    Passwort beendet alle anderen Sitzungen."""
+
+    def __init__(self, config: Config):
+        self.base = dict(config.users)
+        self.file = config.db_path.parent / "users.json"
+
+    def _overrides(self) -> dict[str, str]:
+        try:
+            return json.loads(self.file.read_text(encoding="utf-8"))
+        except (FileNotFoundError, ValueError):
+            return {}
+
+    def get(self, user: str) -> str | None:
+        return self._overrides().get(user) or self.base.get(user)
+
+    def set(self, user: str, password: str) -> None:
+        data = self._overrides()
+        data[user] = hash_password(password)
+        tmp = self.file.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        tmp.chmod(0o600)
+        tmp.replace(self.file)
+
+    def stamp(self, user: str) -> str:
+        stored = self.get(user) or ""
+        return hashlib.sha256(stored.encode()).hexdigest()[:12]
+
+
+def make_session(user: str, key: bytes, stamp: str) -> str:
+    payload = f"{user}|{int(time.time()) + SESSION_DAYS * 86400}|{stamp}"
     sig = hmac.new(key, payload.encode(), hashlib.sha256).hexdigest()
     return base64.urlsafe_b64encode(f"{payload}|{sig}".encode()).decode()
 
 
-def read_session(cookie: str, key: bytes) -> str | None:
+def read_session(cookie: str, key: bytes, users: Users) -> str | None:
     try:
-        user, exp, sig = base64.urlsafe_b64decode(cookie.encode()).decode().rsplit("|", 2)
+        user, exp, stamp, sig = base64.urlsafe_b64decode(cookie.encode()).decode().rsplit("|", 3)
     except Exception:
         return None
-    good = hmac.new(key, f"{user}|{exp}".encode(), hashlib.sha256).hexdigest()
-    if hmac.compare_digest(good, sig) and int(exp) > time.time():
+    good = hmac.new(key, f"{user}|{exp}|{stamp}".encode(), hashlib.sha256).hexdigest()
+    if (hmac.compare_digest(good, sig) and int(exp) > time.time()
+            and users.get(user) and hmac.compare_digest(stamp, users.stamp(user))):
         return user
     return None
 
@@ -84,6 +120,7 @@ def create_app(config: Config, start_background: bool = True) -> FastAPI:
         transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
     )
     key = _secret(config)
+    users = Users(config)
 
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -107,9 +144,10 @@ def create_app(config: Config, start_background: bool = True) -> FastAPI:
                     return JSONResponse({"error": "Bearer-Token fehlt oder ist ungültig"}, status_code=401)
                 return await call_next(request)
             if path.startswith("/api/") and path not in ("/api/login", "/api/logout"):
-                user = read_session(request.cookies.get(COOKIE, ""), key)
+                user = read_session(request.cookies.get(COOKIE, ""), key, users)
                 if not user and not machine:
                     return JSONResponse({"error": "Anmeldung erforderlich"}, status_code=401)
+                request.state.user = user
                 request.state.agent = f"web/{user}" if user else f"{machine}/api"
             return await call_next(request)
 
@@ -148,12 +186,33 @@ def create_app(config: Config, start_background: bool = True) -> FastAPI:
     @app.post("/api/login")
     def login(data: dict = Body(...)):
         user, pw = data.get("user", ""), data.get("password", "")
-        stored = config.users.get(user)
+        stored = users.get(user)
         if not stored or not check_password(pw, stored):
             time.sleep(0.5)
             return JSONResponse({"error": "Benutzer oder Passwort falsch"}, status_code=401)
         resp = JSONResponse({"user": user})
-        resp.set_cookie(COOKIE, make_session(user, key), max_age=SESSION_DAYS * 86400,
+        resp.set_cookie(COOKIE, make_session(user, key, users.stamp(user)), max_age=SESSION_DAYS * 86400,
+                        httponly=True, samesite="lax")
+        return resp
+
+    @app.post("/api/password")
+    def change_password(request: Request, data: dict = Body(...)):
+        user = getattr(request.state, "user", None)
+        if not user:
+            return JSONResponse({"error": "Nur mit Web-Anmeldung möglich"}, status_code=403)
+        old, new = data.get("old", ""), data.get("new", "")
+        if not check_password(old, users.get(user) or ""):
+            time.sleep(0.5)
+            return JSONResponse({"error": "Bisheriges Passwort ist falsch"}, status_code=400)
+        if len(new) < MIN_PASSWORD:
+            return JSONResponse({"error": f"Neues Passwort braucht mindestens {MIN_PASSWORD} Zeichen"}, status_code=400)
+        if new == old:
+            return JSONResponse({"error": "Neues Passwort ist gleich dem bisherigen"}, status_code=400)
+        users.set(user, new)
+        log.info("Passwort geändert für %s", user)
+        # Diese Sitzung bleibt angemeldet, alle anderen enden
+        resp = JSONResponse({"ok": True})
+        resp.set_cookie(COOKIE, make_session(user, key, users.stamp(user)), max_age=SESSION_DAYS * 86400,
                         httponly=True, samesite="lax")
         return resp
 
@@ -165,7 +224,7 @@ def create_app(config: Config, start_background: bool = True) -> FastAPI:
 
     @app.get("/api/me")
     def me(request: Request):
-        return {"agent": agent(request), "areas": [a.name for a in config.areas],
+        return {"agent": agent(request), "user": getattr(request.state, "user", None), "areas": [a.name for a in config.areas],
                 "semantic": bool(svc.semantic), "last_error": svc.last_error,
                 "git": svc.store.git.enabled, "push": config.git_push}
 

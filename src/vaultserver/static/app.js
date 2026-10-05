@@ -42,7 +42,24 @@ $("#login-form").addEventListener("submit", async (ev) => {
     $("#login").style.display = "none"; $("#login-err").textContent = ""; boot();
   } catch (e) { $("#login-err").textContent = e.message; }
 });
-$("#btn-logout").onclick = async () => { await api("POST", "/api/logout"); location.hash = ""; showLogin(); };
+async function logout() { await api("POST", "/api/logout"); location.hash = ""; showLogin(); }
+
+async function changePassword() {
+  const r = await dialog(`Passwort ändern${state.me?.user ? ` (${state.me.user})` : ""}`, [
+    { name: "old", label: "Bisheriges Passwort", type: "password", required: true, autocomplete: "current-password" },
+    { name: "new", label: "Neues Passwort (mindestens 10 Zeichen)", type: "password", required: true, autocomplete: "new-password" },
+    { name: "repeat", label: "Neues Passwort wiederholen", type: "password", required: true, autocomplete: "new-password" },
+  ], "Ändern");
+  if (!r) return;
+  if (r.new !== r.repeat) { toast("Die beiden neuen Passwörter stimmen nicht überein", 4000); return changePassword(); }
+  try {
+    await api("POST", "/api/password", { old: r.old, new: r.new });
+    toast("Passwort geändert. Andere Sitzungen sind abgemeldet.", 4000);
+  } catch (e) { fail(e); }
+}
+
+const accountItems = () => [["Passwort ändern …", changePassword], ["Abmelden", logout]];
+$("#btn-account").onclick = (ev) => { ev.stopPropagation(); menu(ev, accountItems()); };
 
 // ------------------------------------------------------------------ Baum
 
@@ -91,7 +108,7 @@ function renderTree() {
       row.dataset.path = f.path; row.draggable = true;
       row.title = f.kind === "note" ? `${f.title}\n${kb(f.size)} · ${fmtDate(f.mtime)}` : `${f.type} · ${kb(f.size)}`;
       row.innerHTML = `<span class="tw"></span><span class="ic">${f.kind === "note" ? "📄" : "📎"}</span><span>${esc(f.kind === "note" ? name.replace(/\.md$/, "") : name)}</span>`;
-      row.onclick = () => f.kind === "note" ? go(`#/note/${enc(f.path)}`) : window.open(`/api/file/${enc(f.path)}`, "_blank");
+      row.onclick = () => f.kind === "note" ? go(`#/note/${enc(f.path)}`) : openViewer(f.path);
       parent.append(row);
     });
   };
@@ -181,6 +198,50 @@ function pickUpload(folder) {
   i.onchange = async () => { for (const f of i.files) await uploadFile(folder, f); }; i.click();
 }
 
+// ------------------------------------------------------------------ Dateiansicht im Popup
+
+const EXT = (p) => (p.split(".").pop() || "").toLowerCase();
+const KIND = {
+  image: ["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico", "avif"],
+  pdf: ["pdf"], html: ["html", "htm"],
+  video: ["mp4", "webm", "mov", "m4v", "ogv"], audio: ["mp3", "wav", "ogg", "m4a", "flac"],
+  text: ["md", "txt", "csv", "json", "yaml", "yml", "xml", "log", "base", "canvas", "css", "js", "py", "sh", "toml", "ini"],
+};
+const kindOf = (p) => Object.keys(KIND).find((k) => KIND[k].includes(EXT(p))) || "other";
+
+async function openViewer(path) {
+  const url = `/api/file/${enc(path)}`, body = $("#v-body"), v = $("#viewer");
+  $("#v-name").textContent = path; $("#v-download").href = url; $("#v-tab").href = url;
+  body.className = "v-body"; body.innerHTML = "";
+  const k = kindOf(path);
+  if (k === "image") {
+    const img = document.createElement("img"); img.src = url; img.alt = path;
+    img.onclick = () => { img.classList.toggle("zoom"); body.classList.toggle("zoomed"); };
+    body.append(img);
+  } else if (k === "pdf") body.innerHTML = `<iframe src="${url}"></iframe>`;
+  else if (k === "html") body.innerHTML = `<iframe src="${url}" sandbox="allow-scripts"></iframe>`;
+  else if (k === "video") body.innerHTML = `<video src="${url}" controls autoplay></video>`;
+  else if (k === "audio") body.innerHTML = `<audio src="${url}" controls autoplay></audio>`;
+  else if (k === "text") {
+    try { const t = await (await fetch(url)).text(); const pre = document.createElement("pre"); pre.textContent = t; body.append(pre); }
+    catch (e) { body.innerHTML = `<div class="v-info">${esc(e.message)}</div>`; }
+  } else body.innerHTML = `<div class="v-info">Keine Vorschau für .${esc(EXT(path))}-Dateien.<br><br><a href="${url}" download>Herunterladen</a></div>`;
+  if (!v.open) v.showModal();
+}
+function closeViewer() { const v = $("#viewer"); if (v.open) v.close(); $("#v-body").innerHTML = ""; }
+$("#v-close").onclick = closeViewer;
+$("#viewer").addEventListener("close", () => ($("#v-body").innerHTML = ""));  // Video/Audio anhalten
+$("#viewer").addEventListener("click", (ev) => { if (ev.target.id === "viewer") closeViewer(); }); // Klick auf den Hintergrund
+// Links und eingebettete Bilder in Notizen: Anhänge im Popup statt neuem Tab
+$("#content").addEventListener("click", (ev) => {
+  if (ev.ctrlKey || ev.metaKey || ev.shiftKey || ev.button !== 0) return;  // Strg/⌘-Klick: wie gewohnt neuer Tab
+  const el = ev.target.closest("a[href^='/api/file/'], img[data-file]");
+  if (!el || !el.closest(".md")) return;
+  ev.preventDefault();
+  const path = el.dataset.file || decodeURIComponent(el.getAttribute("href").slice("/api/file/".length));
+  openViewer(path);
+});
+
 // ------------------------------------------------------------------ Dialoge
 
 function dialog(title, fields, okLabel = "OK") {
@@ -191,12 +252,13 @@ function dialog(title, fields, okLabel = "OK") {
       let input;
       if (f.type === "select") input = `<select id="${id}" name="${f.name}">${f.options.map((o) => `<option ${o === f.value ? "selected" : ""}>${esc(o)}</option>`).join("")}</select>`;
       else if (f.type === "textarea") input = `<textarea id="${id}" name="${f.name}" placeholder="${esc(f.placeholder || "")}">${esc(f.value || "")}</textarea>`;
+      else if (f.type === "password") input = `<input type="password" id="${id}" name="${f.name}" autocomplete="${f.autocomplete || "off"}" ${f.required ? "required" : ""}>`;
       else input = `<input type="text" id="${id}" name="${f.name}" value="${esc(f.value || "")}" placeholder="${esc(f.placeholder || "")}">`;
       return `<div class="row"><label for="${id}">${esc(f.label)}${f.required ? " *" : ""}</label>${input}</div>`;
     }).join("") + `<div class="btns"><button value="cancel" formnovalidate>Abbrechen</button><button class="primary" value="ok">${esc(okLabel)}</button></div>`;
     dlg.onclose = () => {
       if (dlg.returnValue !== "ok") return resolve(null);
-      const out = {}; fields.forEach((f) => (out[f.name] = form.elements[f.name].value.trim())); resolve(out);
+      const out = {}; fields.forEach((f) => { const v = form.elements[f.name].value; out[f.name] = f.type === "password" ? v : v.trim(); }); resolve(out);
     };
     dlg.returnValue = ""; dlg.showModal(); form.querySelector("input,textarea,select")?.focus();
   });
@@ -300,7 +362,7 @@ async function showNote(path, anchor, edit) {
   $("#b-edit").onclick = () => go(`#/note/${enc(path)}?edit=1`);
   $("#b-more").onclick = (ev) => { ev.stopPropagation(); menu(ev, [
     ["Umbenennen/verschieben …", () => askMove(path)],
-    ["Rohtext öffnen", () => window.open(`/api/file/${enc(path)}`, "_blank")],
+    ["Rohtext anzeigen", () => openViewer(path)],
     ["Löschen …", () => delNote(path)],
   ]); };
   if ($("#b-claim")) $("#b-claim").onclick = async () => {
@@ -509,7 +571,7 @@ $("#btn-lint").onclick = () => go("#/lint");
 $("#btn-tasks").onclick = () => go("#/tasks");
 $("#btn-more").onclick = (ev) => { ev.stopPropagation(); menu(ev, [
   ["Änderungen", () => go("#/recent")], ["Aufgaben", () => go("#/tasks")], ["Prüfung", () => go("#/lint")],
-  ["Abmelden", () => $("#btn-logout").click()],
+  ...accountItems(),
 ]); };
 $("#toggle-tree").onclick = () => document.body.classList.toggle("tree-open");
 

@@ -29,7 +29,7 @@ Schreibende Aufrufe brauchen die zuletzt gelesene Version (`base_version`). Hat 
 
 ## Web-Oberfläche
 
-Ordnerbaum mit Ziehen und Ablegen und Kontextmenü, gerenderte Notizen mit Wikilinks, Bildern, HTML-Mockups und anklickbaren Checkboxen, Gliederung, Eigenschaften (Status direkt umschaltbar), Backlinks und Git-Verlauf. Dazu Suche (Strg+K), Editor mit Wikilink-Vervollständigung nach `[[`, Konfliktansicht, neue FIX- und Feature-Einträge aus der Vorlage, Prüfung und Änderungsliste. Funktioniert auch auf dem Handy.
+Ordnerbaum mit Ziehen und Ablegen und Kontextmenü, gerenderte Notizen mit Wikilinks, Bildern, HTML-Mockups und anklickbaren Checkboxen, Gliederung, Eigenschaften (Status direkt umschaltbar), Backlinks und Git-Verlauf. Bilder, PDFs, Mockups und andere Anhänge öffnen sich in einem Ansichtsfenster auf der Seite statt in einem neuen Tab (Strg-Klick öffnet weiterhin einen Tab). Dazu Suche (Strg+K), Editor mit Wikilink-Vervollständigung nach `[[`, Konfliktansicht, neue FIX- und Feature-Einträge aus der Vorlage, Prüfung, Änderungsliste und Passwortänderung. Funktioniert auch auf dem Handy.
 
 ## Entwicklung
 
