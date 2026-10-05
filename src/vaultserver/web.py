@@ -1,0 +1,389 @@
+"""FastAPI-Anwendung: Web-Oberfläche (/), REST (/api/…) und MCP (/mcp) auf einem Port."""
+
+from __future__ import annotations
+
+import base64
+import contextlib
+import hashlib
+import hmac
+import logging
+import mimetypes
+import secrets
+import time
+from pathlib import Path, PurePosixPath
+
+from fastapi import Body, FastAPI, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
+from mcp.server.transport_security import TransportSecuritySettings
+from starlette.middleware.base import BaseHTTPMiddleware
+
+from .config import Config
+from .index import Index
+from .mcp_server import build_mcp
+from .render import render
+from .service import Service
+from .store import Conflict, Rejected
+
+log = logging.getLogger("vaultserver")
+STATIC = Path(__file__).parent / "static"
+COOKIE = "vs_session"
+SESSION_DAYS = 30
+
+
+# ------------------------------------------------------------------ Passwörter und Sitzungen
+
+def hash_password(password: str) -> str:
+    salt = secrets.token_bytes(16)
+    h = hashlib.scrypt(password.encode(), salt=salt, n=2**14, r=8, p=1)
+    return f"scrypt${salt.hex()}${h.hex()}"
+
+
+def check_password(password: str, stored: str) -> bool:
+    try:
+        _, salt, h = stored.split("$")
+        calc = hashlib.scrypt(password.encode(), salt=bytes.fromhex(salt), n=2**14, r=8, p=1)
+        return hmac.compare_digest(calc.hex(), h)
+    except ValueError:
+        return False
+
+
+def _secret(config: Config) -> bytes:
+    if config.secret:
+        return config.secret.encode()
+    f = config.db_path.parent / "secret"
+    if not f.exists():
+        f.write_text(secrets.token_hex(32))
+        f.chmod(0o600)
+    return f.read_text().strip().encode()
+
+
+def make_session(user: str, key: bytes) -> str:
+    payload = f"{user}|{int(time.time()) + SESSION_DAYS * 86400}"
+    sig = hmac.new(key, payload.encode(), hashlib.sha256).hexdigest()
+    return base64.urlsafe_b64encode(f"{payload}|{sig}".encode()).decode()
+
+
+def read_session(cookie: str, key: bytes) -> str | None:
+    try:
+        user, exp, sig = base64.urlsafe_b64decode(cookie.encode()).decode().rsplit("|", 2)
+    except Exception:
+        return None
+    good = hmac.new(key, f"{user}|{exp}".encode(), hashlib.sha256).hexdigest()
+    if hmac.compare_digest(good, sig) and int(exp) > time.time():
+        return user
+    return None
+
+
+# ------------------------------------------------------------------ Anwendung
+
+def create_app(config: Config, start_background: bool = True) -> FastAPI:
+    svc = Service(config)
+    mcp = build_mcp(svc)
+    mcp_app = mcp.streamable_http_app(
+        streamable_http_path="/mcp", stateless_http=True, json_response=True,
+        transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+    )
+    key = _secret(config)
+
+    @contextlib.asynccontextmanager
+    async def lifespan(app: FastAPI):
+        if start_background:
+            svc.start()
+        async with mcp.session_manager.run():
+            yield
+        svc.stop()
+
+    app = FastAPI(title="VaultServer", lifespan=lifespan, docs_url=None, redoc_url=None)
+    app.state.svc = svc
+
+    class Auth(BaseHTTPMiddleware):
+        async def dispatch(self, request: Request, call_next):
+            path = request.url.path
+            auth = request.headers.get("authorization", "")
+            token = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
+            machine = config.tokens.get(token) if token else None
+            if path == "/mcp" or path.startswith("/mcp/"):
+                if not machine:
+                    return JSONResponse({"error": "Bearer-Token fehlt oder ist ungültig"}, status_code=401)
+                return await call_next(request)
+            if path.startswith("/api/") and path not in ("/api/login", "/api/logout"):
+                user = read_session(request.cookies.get(COOKIE, ""), key)
+                if not user and not machine:
+                    return JSONResponse({"error": "Anmeldung erforderlich"}, status_code=401)
+                request.state.agent = f"web/{user}" if user else f"{machine}/api"
+            return await call_next(request)
+
+    app.add_middleware(Auth)
+
+    def agent(request: Request) -> str:
+        return getattr(request.state, "agent", "web/unbekannt")
+
+    def resolver(note: str):
+        idx: Index = svc.index
+        files = [r["path"] for r in idx.db.execute("SELECT path FROM notes UNION ALL SELECT path FROM attachments")]
+        by_lower = {f.lower(): f for f in files}
+        by_name: dict[str, list[str]] = {}
+        for f in files:
+            n = PurePosixPath(f).name.lower()
+            by_name.setdefault(n, []).append(f)
+            if n.endswith(".md"):
+                by_name.setdefault(n[:-3], []).append(f)
+        aliases = {r["alias_norm"]: r["path"] for r in idx.db.execute(
+            "SELECT a.alias_norm, n.path FROM aliases a JOIN notes n ON n.id = a.note_id")}
+        return lambda target, kind: Index._resolve(target, kind, note, by_lower, by_name, aliases)
+
+    def err(e: Exception):
+        if isinstance(e, Conflict):
+            return JSONResponse(e.as_dict(), status_code=409)
+        if isinstance(e, Rejected):
+            return JSONResponse(e.as_dict(), status_code=422)
+        if isinstance(e, KeyError):
+            return JSONResponse({"error": "not_found", "message": e.args[0] if e.args else str(e)}, status_code=404)
+        if isinstance(e, ValueError):
+            return JSONResponse({"error": "bad_request", "message": str(e)}, status_code=400)
+        raise e
+
+    # -------------------------------------------------------------- Anmeldung
+
+    @app.post("/api/login")
+    def login(data: dict = Body(...)):
+        user, pw = data.get("user", ""), data.get("password", "")
+        stored = config.users.get(user)
+        if not stored or not check_password(pw, stored):
+            time.sleep(0.5)
+            return JSONResponse({"error": "Benutzer oder Passwort falsch"}, status_code=401)
+        resp = JSONResponse({"user": user})
+        resp.set_cookie(COOKIE, make_session(user, key), max_age=SESSION_DAYS * 86400,
+                        httponly=True, samesite="lax")
+        return resp
+
+    @app.post("/api/logout")
+    def logout():
+        resp = JSONResponse({"ok": True})
+        resp.delete_cookie(COOKIE)
+        return resp
+
+    @app.get("/api/me")
+    def me(request: Request):
+        return {"agent": agent(request), "areas": [a.name for a in config.areas],
+                "semantic": bool(svc.semantic), "last_error": svc.last_error,
+                "git": svc.store.git.enabled, "push": config.git_push}
+
+    # -------------------------------------------------------------- lesen
+
+    @app.get("/api/tree")
+    def tree():
+        with svc.lock:
+            notes = [dict(r) for r in svc.index.db.execute("SELECT path, title, size, mtime FROM notes ORDER BY path")]
+            atts = [dict(r) for r in svc.index.db.execute("SELECT path, type, size, mtime FROM attachments ORDER BY path")]
+        return {"notes": notes, "attachments": atts}
+
+    @app.get("/api/note")
+    def note(path: str, raw: bool = False):
+        try:
+            with svc.lock:
+                res = svc.store.read_tracked(path)
+                if raw:
+                    return res
+                res["html"] = render(res["text"], path, resolver(path))
+                res["outline"] = svc.index.outline(path)
+                res["backlinks"] = svc.index.backlinks(path)
+                # Seitenleiste: nur der Eigenschaftsblock oben (wie bei der Regelprüfung)
+                top_end = next((o["line_start"] for o in res.get("outline") or svc.index.outline(path)
+                                if o["level"] >= 2), 10**9)
+                res["properties"] = [p for p in svc.index.note_properties(path)
+                                     if p["source"] == "frontmatter" or (p["line"] or 0) < top_end]
+                res["title"] = svc.index._note(path)["title"]
+                area = config.area_for(path)
+                res["area"] = area.name if area else None
+                res["violations"] = sorted(svc.store.violations(path, res["text"]))
+            res["history"] = svc.history(path, 15)
+            return res
+        except Exception as e:
+            return err(e)
+
+    @app.get("/api/file/{path:path}")
+    def file(path: str):
+        try:
+            full = svc.store._abs(path)
+        except Rejected as e:
+            return err(e)
+        if not full.is_file():
+            raise HTTPException(404)
+        mime = mimetypes.guess_type(path)[0] or "application/octet-stream"
+        return FileResponse(full, media_type=mime)
+
+    @app.get("/api/search")
+    def search(q: str, folder: str | None = None, archive: bool = False, mode: str = "text", limit: int = 30):
+        try:
+            return svc.search(q, mode=mode, folder=folder, include_archive=archive, limit=limit)
+        except Exception as e:
+            return err(e)
+
+    @app.get("/api/query")
+    def query(f: list[str] = [], folder: str | None = None, archive: bool = False):
+        from .cli import parse_filter
+        try:
+            with svc.lock:
+                return svc.index.query([parse_filter(x) for x in f], folder=folder, include_archive=archive)
+        except Exception as e:
+            return err(e)
+
+    @app.get("/api/complete")
+    def complete(q: str = "", limit: int = 15):
+        """Vorschläge für die Wikilink-Vervollständigung im Editor."""
+        like = f"%{q.lower()}%"
+        with svc.lock:
+            rows = svc.index.db.execute(
+                "SELECT path, title FROM notes WHERE lower(path) LIKE ? OR lower(title) LIKE ?"
+                " ORDER BY length(path) LIMIT ?", (like, like, limit)).fetchall()
+            atts = svc.index.db.execute(
+                "SELECT path FROM attachments WHERE lower(path) LIKE ? LIMIT 5", (like,)).fetchall()
+        return [{"path": r["path"], "title": r["title"], "link": PurePosixPath(r["path"]).stem} for r in rows] + \
+               [{"path": r["path"], "title": PurePosixPath(r["path"]).name, "link": PurePosixPath(r["path"]).name}
+                for r in atts]
+
+    @app.get("/api/recent")
+    def recent(limit: int = 30):
+        return svc.recent(limit)
+
+    @app.get("/api/tasks")
+    def tasks(folder: str | None = None, done: bool = False):
+        with svc.lock:
+            return svc.index.tasks(folder=folder, done=done)
+
+    @app.get("/api/lint")
+    def lint(area: str | None = None):
+        try:
+            return svc.store.lint(area)
+        except Exception as e:
+            return err(e)
+
+    @app.get("/api/claims")
+    def claims():
+        with svc.lock:
+            return svc.store.claims()
+
+    @app.get("/api/guide")
+    def guide(area: str | None = None):
+        try:
+            return svc.guide(area)
+        except Exception as e:
+            return err(e)
+
+    # -------------------------------------------------------------- schreiben
+
+    @app.put("/api/note")
+    def put_note(request: Request, data: dict = Body(...)):
+        try:
+            return svc.store.write(data["path"], data["text"], agent(request),
+                                   base_version=data.get("base_version"), message=data.get("message"),
+                                   force=bool(data.get("force")))
+        except Exception as e:
+            return err(e)
+
+    @app.post("/api/task")
+    def toggle_task(request: Request, data: dict = Body(...)):
+        """Checkbox in Zeile `line` umschalten (Version wird geprüft)."""
+        path, line = data["path"], int(data["line"])
+        try:
+            with svc.lock:
+                text, ver = svc.store.current(path)
+                if text is None:
+                    raise KeyError(path)
+                if data.get("base_version") and data["base_version"] != ver:
+                    raise Conflict(path, ver, text)
+                lines = text.split("\n")
+                l = lines[line - 1]
+                import re
+                m = re.match(r"^(\s*[-*+]\s+\[)([ xX])(\].*)$", l)
+                if not m:
+                    raise Rejected(f"Zeile {line} ist keine Checkbox")
+                lines[line - 1] = m.group(1) + (" " if m.group(2) != " " else "x") + m.group(3)
+                return svc.store.write(path, "\n".join(lines), agent(request), base_version=ver,
+                                       message=f"{PurePosixPath(path).stem}: Checkbox Zeile {line}")
+        except Exception as e:
+            return err(e)
+
+    @app.post("/api/property")
+    def set_prop(request: Request, data: dict = Body(...)):
+        try:
+            return svc.store.set_property(data["path"], data["key"], data["value"], agent(request),
+                                          base_version=data.get("base_version"))
+        except Exception as e:
+            return err(e)
+
+    @app.post("/api/move")
+    def move(request: Request, data: dict = Body(...)):
+        try:
+            return svc.store.move(data["source"], data["target"], agent(request))
+        except Exception as e:
+            return err(e)
+
+    @app.delete("/api/note")
+    def delete(request: Request, path: str, base_version: str):
+        try:
+            return svc.store.delete(path, agent(request), base_version=base_version)
+        except Exception as e:
+            return err(e)
+
+    @app.post("/api/create")
+    def create(request: Request, data: dict = Body(...)):
+        try:
+            return svc.store.create_from_template(data["area"], data["title"], data.get("fields", {}),
+                                                  agent(request), summary=data.get("summary", ""))
+        except Exception as e:
+            return err(e)
+
+    @app.post("/api/upload")
+    async def upload(request: Request, folder: str, file: UploadFile):
+        data = await file.read()
+        target = f"{folder.strip('/')}/{file.filename}" if folder.strip("/") else file.filename
+        try:
+            return svc.store.upload(target, data, agent(request))
+        except Exception as e:
+            return err(e)
+
+    @app.post("/api/claim")
+    def claim(request: Request, data: dict = Body(...)):
+        try:
+            if data.get("release"):
+                return svc.store.release(data["path"], agent(request), force=True)
+            return svc.store.claim(data["path"], agent(request), note=data.get("note", ""))
+        except Exception as e:
+            return err(e)
+
+    @app.post("/api/refresh")
+    def refresh(request: Request, data: dict = Body(...)):
+        try:
+            what = data.get("what")
+            if what == "status":
+                return svc.store.refresh_status(agent(request))
+            if what == "commits":
+                return svc.store.link_commits(agent(request))
+            return svc.store.refresh_overview(data["area"], agent(request))
+        except Exception as e:
+            return err(e)
+
+    # -------------------------------------------------------------- MCP und Oberfläche
+
+    for route in mcp_app.routes:
+        app.router.routes.append(route)
+
+    @app.get("/healthz")
+    def health():
+        return {"ok": True, "notes": svc.index.stats()["notes"], "last_error": svc.last_error}
+
+    @app.get("/static/{name:path}")
+    def static(name: str):
+        f = (STATIC / name).resolve()
+        if STATIC.resolve() not in f.parents or not f.is_file():
+            raise HTTPException(404)
+        return FileResponse(f, headers={"Cache-Control": "no-cache"})
+
+    @app.get("/", response_class=HTMLResponse)
+    def index():
+        return HTMLResponse((STATIC / "index.html").read_text(encoding="utf-8"),
+                            headers={"Cache-Control": "no-cache"})
+
+    return app

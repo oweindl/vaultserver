@@ -18,6 +18,9 @@ from pathlib import Path, PurePosixPath
 from .config import Config
 from .parser import parse_note
 
+# Erhöhen, wenn sich Parser oder Schema ändern: der Index baut sich dann beim Start neu auf
+INDEX_VERSION = "3"
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS notes (
     id INTEGER PRIMARY KEY,
@@ -89,6 +92,20 @@ CREATE TABLE IF NOT EXISTS aliases (
     alias_norm TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS aliases_norm ON aliases(alias_norm);
+CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+-- Zustand, der nicht aus den Dateien ableitbar ist (überlebt rebuild)
+CREATE TABLE IF NOT EXISTS claims (
+    path TEXT PRIMARY KEY,
+    agent TEXT NOT NULL,
+    note TEXT NOT NULL,
+    claimed_at REAL NOT NULL,
+    expires_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS embeddings (
+    text_hash TEXT PRIMARY KEY,
+    model TEXT NOT NULL,
+    vector BLOB NOT NULL
+);
 CREATE TABLE IF NOT EXISTS attachments (
     path TEXT PRIMARY KEY,
     type TEXT NOT NULL,
@@ -121,6 +138,12 @@ class Index:
         self.db.execute("PRAGMA foreign_keys = ON")
         self.db.execute("PRAGMA journal_mode = WAL")
         self.db.executescript(SCHEMA)
+        row = self.db.execute("SELECT value FROM meta WHERE key = 'index_version'").fetchone()
+        if not row or row[0] != INDEX_VERSION:
+            with self.db:
+                for table in ("notes", "sections_fts", "attachments"):
+                    self.db.execute(f"DELETE FROM {table}")
+                self.db.execute("INSERT OR REPLACE INTO meta VALUES ('index_version', ?)", (INDEX_VERSION,))
 
     def close(self) -> None:
         self.db.close()
@@ -147,23 +170,30 @@ class Index:
     def sync(self) -> SyncStats:
         t0 = time.perf_counter()
         stats = SyncStats()
-        known = {r["path"]: r["version"] for r in self.db.execute("SELECT path, version FROM notes")}
+        known = {r["path"]: (r["version"], r["mtime"], r["size"])
+                 for r in self.db.execute("SELECT path, version, mtime, size FROM notes")}
         seen_notes: set[str] = set()
         seen_att: set[str] = set()
         with self.db:
             for full, rel in self._walk():
                 if rel.lower().endswith(".md"):
                     seen_notes.add(rel)
+                    st = full.stat()
+                    old = known.get(rel)
+                    if old and old[1] == st.st_mtime and old[2] == st.st_size:
+                        stats.unchanged += 1
+                        continue
                     data = full.read_bytes()
                     version = hashlib.sha256(data).hexdigest()[:16]
-                    if known.get(rel) == version:
+                    if old and old[0] == version:
+                        self.db.execute("UPDATE notes SET mtime = ? WHERE path = ?", (st.st_mtime, rel))
                         stats.unchanged += 1
                         continue
                     if rel in known:
                         stats.updated += 1
                     else:
                         stats.added += 1
-                    self._index_note(rel, data, version, full.stat().st_mtime)
+                    self._index_note(rel, data, version, st.st_mtime)
                 else:
                     seen_att.add(rel)
                     st = full.stat()
@@ -341,13 +371,20 @@ class Index:
               limit: int = 200) -> list[dict]:
         """Notizen über Eigenschaften filtern.
 
-        filters: (Schlüssel, Operator, Wert); Operatoren: = != ~ (enthält) !~ exists missing
+        filters: (Schlüssel, Operator, Wert); Operatoren: = != ~ (enthält) !~ exists missing.
+        Wert "@gruppe" steht für alle Werte einer Gruppe aus der Konfiguration (nur = und !=).
         """
         where, args = ["1=1"], []
         for key, op, value in filters:
             kn = norm_key(key)
-            vn = self.config.normalize_value(kn, value) if value else ""
             sub = "SELECT note_id FROM properties WHERE key_norm = ?"
+            group = self.config.expand_group(kn, value) if value else None
+            if group is not None and op in ("=", "!="):
+                marks = ",".join("?" * len(group))
+                neg = "NOT " if op == "!=" else ""
+                where.append(f"n.id {neg}IN ({sub} AND value_norm IN ({marks}))"); args += [kn, *group]
+                continue
+            vn = self.config.normalize_value(kn, value) if value else ""
             if op == "=":
                 where.append(f"n.id IN ({sub} AND value_norm = ?)"); args += [kn, vn]
             elif op == "!=":
@@ -390,6 +427,27 @@ class Index:
         if not row:
             raise KeyError(f"Notiz nicht gefunden: {path}")
         return row
+
+    def version(self, path: str) -> str | None:
+        row = self.db.execute("SELECT version FROM notes WHERE path = ?", (path,)).fetchone()
+        return row["version"] if row else None
+
+    def index_file(self, rel: str) -> None:
+        """Eine Datei nach einer Änderung durch den Server sofort nachziehen."""
+        full = self.config.vault_path / rel
+        with self.db:
+            if not full.exists():
+                self._remove_note(rel)
+                self.db.execute("DELETE FROM attachments WHERE path = ?", (rel,))
+            elif rel.lower().endswith(".md"):
+                data = full.read_bytes()
+                self._index_note(rel, data, hashlib.sha256(data).hexdigest()[:16], full.stat().st_mtime)
+            else:
+                st = full.stat()
+                mime = mimetypes.guess_type(rel)[0] or "application/octet-stream"
+                self.db.execute("INSERT OR REPLACE INTO attachments(path, type, size, mtime) VALUES (?,?,?,?)",
+                                (rel, mime, st.st_size, st.st_mtime))
+            self._resolve_links()
 
     def outline(self, path: str) -> list[dict]:
         n = self._note(path)
@@ -493,6 +551,12 @@ class Index:
             " GROUP_CONCAT(DISTINCT p.source) AS source FROM properties p JOIN notes n ON n.id = p.note_id"
             f"{where} GROUP BY p.key_norm HAVING notes >= ? ORDER BY notes DESC, key",
             args + [min_notes])]
+
+    def note_properties(self, path: str) -> list[dict]:
+        n = self._note(path)
+        return [dict(r) for r in self.db.execute(
+            "SELECT key, key_norm, value, value_norm, source, line FROM properties WHERE note_id = ?"
+            " ORDER BY line", (n["id"],))]
 
     def stats(self) -> dict:
         one = lambda sql: self.db.execute(sql).fetchone()[0]

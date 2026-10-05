@@ -18,6 +18,8 @@ tags: [bug]
 - https://example.com/nackt
 - a. sammeln: kein Schlüssel
 - Ist: was heute passiert
+- Soll (Oliver, 2026-10-05): anders
+- Akzeptanzkriterien:
 - [ ] Status: das ist eine Aufgabe, keine Eigenschaft
 
 ## Beschreibung
@@ -53,7 +55,7 @@ def vault(tmp_path: Path) -> Index:
     (v / "Fixliste" / "FIX-056.md").write_text("# FIX-056\n\n- Status: offen\n- Priorität: niedrig\n", encoding="utf-8")
     (v / "Fixliste.md").write_text(
         "# Fixliste\n\n| Fix | Text |\n|---|---|\n| [[Fixliste/FIX-054\\|FIX-054]] | x |\n"
-        "| [[Fix 54]] | Alias |\n| [[Gibt es nicht]] | kaputt |\n", encoding="utf-8")
+        "| [[Fix 54]] | Alias |\n| [[Gibt es nicht]] | kaputt |\n\n### [[FIX-055|FIX-055 · Titel]]\n", encoding="utf-8")
     (v / "Features" / "34-Signatur.md").write_text(
         "# Feature 34\n\n## Stufe 1\n\nText eins\n\n## Stufe 2\n\nText zwei Prüfung\n\n### Tests\n\nT\n\n## Stufe 3\n\nDrei\n",
         encoding="utf-8")
@@ -79,6 +81,7 @@ def test_parser_properties_and_sections():
     assert not any(p.key == "https" for p in n.properties)
     assert not any(p.key.startswith("a.") for p in n.properties)
     assert ("Ist", "was heute passiert") in props
+    assert ("Soll", "anders") in props and ("Akzeptanzkriterien", "") in props
     assert not any(p.value.startswith("nicht im Code") for p in n.properties)
     assert n.aliases == ["Fix 54"]
     assert n.tags == {"bug", "export"}
@@ -165,3 +168,35 @@ def test_canonical_rules(tmp_path: Path):
     assert n("status", "Stufe 1 und 2 erledigt (Test)") == "teilweise-test"
     assert n("status", "offen (Option)") == "offen"
     assert n("status", "Irgendwas Neues") == "irgendwas neues"
+
+
+def test_heading_links_count_as_backlinks(vault: Index):
+    assert "Fixliste.md" in {b["path"] for b in vault.backlinks("Fixliste/FIX-055.md")}
+    ol = vault.outline("Fixliste.md")
+    assert ol[-1]["heading"] == "FIX-055 · Titel"
+
+
+def test_render_tasks_wikilinks_embeds():
+    from vaultserver.render import render
+    text = "---\na: 1\n---\n# T\n\n- [ ] offen [[Ziel|Alias]]\n- [x] fertig\n\n![[bild.png]] ![[Fehlt]]\n\n`[[nicht]]`\n"
+    res = {"Ziel": "Ordner/Ziel.md", "bild.png": "Bilder/bild.png"}
+    html = render(text, "T.md", lambda t, k: res.get(t))
+    assert 'data-line="6"' in html and 'data-line="7" checked' in html
+    assert 'href="#/note/Ordner/Ziel.md"' in html and ">Alias</a>" in html
+    assert '<img src="/api/file/Bilder/bild.png"' in html and "wikilink broken" in html
+    assert "<code>[[nicht]]</code>" in html
+
+
+def test_semantic_with_fake_embedder(vault: Index):
+    from vaultserver.semantic import Semantic
+    words = ["export", "prüfung", "signatur", "stufe", "alias", "fix"]
+
+    def embed(texts):  # Wortzähler als Vektor: reicht, um Ranking und Cache zu prüfen
+        return [[t.lower().count(w) + 0.01 for w in words] for t in texts]
+
+    sem = Semantic(vault, "http://unbenutzt", "fake", embed=embed)
+    n = sem.update()
+    assert n == vault.stats()["sections"]
+    assert sem.update() == 0  # unveränderte Abschnitte werden nicht neu berechnet
+    hits = sem.search("signatur stufe", limit=2)
+    assert hits[0]["path"] == "Features/34-Signatur.md"

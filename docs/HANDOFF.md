@@ -1,51 +1,51 @@
-# VaultServer – Übergabe (Stand 2026-10-05)
+# VaultServer – Übergabe (Stand 2026-10-05 abends)
 
-Diese Datei übergibt den Stand an die nächste Claude-Sitzung. Start mit: „Lies docs/HANDOFF.md und docs/KONZEPT.md und mach weiter.“
+Diese Datei übergibt den Stand an die nächste Claude-Sitzung. Start mit: „Lies docs/HANDOFF.md und docs/BETRIEB.md und mach weiter.“
 
-## Was steht
+## Stand
 
-- **Konzept:** `docs/KONZEPT.md` (Live-Doc: https://claude.ai/code/artifact/c6090794-dc51-42e7-9285-c325fdac0748)
-- **Repo:** `oweindl/vaultserver`, public, MIT. Erster Commit enthält README, LICENSE, .gitignore, `docs/`.
-- **Architektur:** Markdown-Dateien im Git-Repo = Quelle der Wahrheit; SQLite-FTS5 = Index (Abschnitte, Links, Eigenschaften, Tags, Aufgaben); ein FastAPI-Dienst liefert Web-UI, REST und MCP.
+Alle sechs Phasen und die Zusatzfunktionen 1–8 sind umgesetzt. Der Dienst läuft auf `webtest` (192.168.1.32:8100) als systemd-Benutzerdienst gegen den echten Vault `~/obsidian-oweindl` und pusht Änderungen nach `oweindl/obsidian-oweindl`. Claude Code auf `webtest` ist angebunden. Betrieb, Tokens und Konfiguration: [BETRIEB.md](BETRIEB.md).
 
-## Entscheidungen von Oliver
+| Teil | Dateien |
+| --- | --- |
+| Parser, Index | `parser.py`, `index.py` (FTS5, Link-Auflösung wie Obsidian, `INDEX_VERSION` erzwingt Neuaufbau) |
+| Schreiben, Regeln, Claims, Vorlagen, Übersichten, Lint, `changes_since`, Commit-Verknüpfung | `store.py`, `gitops.py` |
+| `guide`, Hintergrund (Datei-Wächter, Pull, Push) | `service.py` |
+| MCP (23 Werkzeuge) | `mcp_server.py` (MCP-SDK 2.3: `MCPServer`, Fehler für Agenten als `ToolError`) |
+| Web und REST, Anmeldung | `web.py`, `render.py`, `static/` (ohne Build, CodeMirror 5 im Repo) |
+| Semantische Suche | `semantic.py` (Ollama, ausgeschaltet) |
+
+Tests: `.venv/bin/pytest` (22 grün). Messung echter Vault: Neuaufbau 0,58 s, Suche Median 2,1 ms.
+
+## Entscheidungen
 
 | Thema | Entscheidung |
 | --- | --- |
 | Datenhaltung | Markdown + Git + SQLite-Index |
-| Host | Ubuntu-Rechner, systemd-Dienst |
-| Port | **8100** für alles: `/` Web-Viewer/Editor, `/mcp` MCP-Server, `/api/…` REST |
-| Name | VaultServer |
-| Eigenschaften | Alle `- Schlüssel: Wert`-Zeilen und Frontmatter-Felder (keine feste Liste) |
-| Agentenpflicht | Claude-Code-Instanzen setzen und nutzen die Eigenschaften konsequent; Server erzwingt das |
-| Zusatzfunktionen | Ideen 1–8 alle im Umfang (bestätigt 2026-10-05) |
-| Host (konkret) | `webtest`, 192.168.1.32; Port 8100 frei (geprüft 2026-10-05) |
-| Obsidian | wird abgelöst, VaultServer ist einziger Schreiber |
-| Vault-Git | `oweindl/obsidian-oweindl` (privat), geklont nach `~/obsidian-oweindl`; Zugriff über `gh` (HTTPS, Konto oweindl). Achtung: `~/.ssh/id_ed25519` ist nur Deploy-Key für PDFCloud-Pro |
-| GitHub-Issues | erst nach Abschluss der Definition |
+| Host, Port | `webtest`, 8100 für Web, REST und MCP |
+| Obsidian | wird abgelöst; VaultServer ist einziger Schreiber |
+| Eigenschaften | alle `- Schlüssel: Wert`-Zeilen ohne Einrückung und alle Frontmatter-Felder; Regeln prüfen nur den Block oben in der Notiz |
+| Statuswerte | wie in `Fixliste.md` festgelegt: offen, in Arbeit, erledigt (Test), abgenommen, produktiv, blockiert; dazu teilweise (Test) für Features. Freitext wird per `[canonical]` abgebildet, die Dateien bleiben unverändert |
+| Agentenpflicht | Server lehnt neue Verstöße ab (Pflichtfelder, erlaubte Werte); Details wie Commits gehören in „Umsetzung“ |
+| Automatische Inhalte | Übersichten, Statusblock und Commit-Verknüpfung nur auf Aufruf, nicht zeitgesteuert |
 
-## Noch offen (Oliver)
+Die Statuswerte und die Regel „Details in Umsetzung“ hat Claude festgelegt, weil Oliver „ohne Rückfragen fertigstellen“ vorgegeben hat. Beides steht in der Konfiguration und lässt sich dort ändern.
 
-- [ ] Kanonische Statuswerte bestätigen (Vorschlag in `vaultserver.example.toml`, Abschnitt `[canonical]`): erledigt-ausgerollt, erledigt-abgenommen, erledigt-test, teilweise-test, behoben-pruefen, offen, geplant, entwurf, aktiv, fertig
-- [ ] Sollen Agenten künftig nur noch kanonische Werte schreiben (Details wie Commits in eigene Zeile `- Umsetzung:`)? Das wäre die Grundlage für `guide`/`lint` (Ideen 1, 6)
+## Offen
 
-## Stand Phase 1 (2026-10-05)
+- [ ] ubuntu1, ubuntu2 und die Workstation anbinden (Befehle mit Tokens in `data/clients.md` auf `webtest`), dort das Obsidian-MCP entfernen und den `CLAUDE.md`-Block übernehmen
+- [ ] Obsidian und Obsidian-Git auf der Workstation abschalten, sobald alle Rechner umgestellt sind
+- [ ] Rechnernamen der Tokens prüfen (angenommen: webtest, ubuntu1, ubuntu2, workstation)
+- [ ] Lint-Befunde im Vault: FIX-051, 052, 057, 058 ohne Soll/Akzeptanzkriterien/Wenn unklar, FIX-025 und FIX-054 ohne „Wenn unklar“, drei kaputte Wikilinks (`Willkommen.md`, zweimal „Aegis Aerospace“ in `Moon/`)
+- [ ] Ollama installieren, falls semantische Suche gewünscht ist
+- [ ] Commit-Verknüpfung einmal bewusst auslösen (ändert rund 40 FIX-Dateien)
 
-- Gebaut: `src/vaultserver/` mit `parser.py` (Abschnitte, Links, Eigenschaften, Tags, Aufgaben), `index.py` (SQLite-FTS5, inkrementeller Abgleich über Prüfsummen, Link-Auflösung wie Obsidian, search/query/outline/read/backlinks/tasks/list), `cli.py`.
-- Tests: `.venv/bin/pytest` (7 grün).
-- Messung mit synthetischem Vault (250 Notizen, Dateien bis 205 KB, `scripts/make_sample_vault.py`): Neuaufbau 0,29 s, Suche Median 4,4 ms / p95 5,6 ms, Eigenschafts-Abfrage 0,4 ms.
-- Archiv (Idee 7) ist im Index schon umgesetzt: `Archiv/` nur mit `include_archive`.
-- **Echter Vault** (`~/obsidian-oweindl`, 251 Notizen, 2,7 MB Text, 45 Anhänge): Neuaufbau 0,58 s, Suche Median 2,1 ms / p95 3,2 ms, Abfrage 0,2 ms. 3 kaputte Wikilinks (`Willkommen.md` → „Neuer Link“, 2× „Aegis Aerospace“ in `Moon/`).
-- **Befund Eigenschaften:** ~1160 Schlüssel, davon 93 in ≥ 3 Notizen; Rest ist Fließtext in Aufzählungen. `Ist`/`Soll`/`Wenn unklar` sind echte Felder der Fixliste-Vorlage, deshalb kein Filter nach Position. `vaultserver keys` zeigt die Schlüssel mit Häufigkeit (Grundlage für `guide`).
-- **Befund Status:** 50 verschiedene Freitext-Werte (mit Commits, Branches, Kommentaren). Regeln unter `[canonical]` in der Konfiguration bilden sie auf 10 Werte ab; Rohtext bleibt unverändert. Offene Fixes: `vaultserver query "Status!~erledigt" --folder ContentManagementTool/Fixliste` → FIX-050, 055, 056.
+## Vorfall beim Einrichten
 
-## Nächste Schritte
-
-1. GitHub-Issues: angelegt (#1–#6 Epics je Phase, #1 geschlossen; #7–#19 MCP-Werkzeuge; #20–#27 Zusatzfunktionen 1–8, alle unter Epic #2).
-2. Phase 2 (#2): MCP-Server (FastAPI + Streamable HTTP) auf Port 8100, Lesewerkzeuge, dann Schreiben mit Versionsprüfung und Git-Commit.
+Beim ersten Test gegen den laufenden Dienst lief versehentlich ein schreibendes Testskript gegen den echten Vault. Es legte FIX-059 an, änderte und löschte ihn wieder (7 Commits von `webtest/claude-code`). Commit `6033b02` stellt `Fixliste.md` wieder her; der Inhalt des Vaults ist identisch mit dem Stand davor (`e0483f4`). Seitdem gibt es `scripts/smoke.py`, das nur lesende Werkzeuge zulässt.
 
 ## Hinweise für die nächste Sitzung
 
-- `gh` liegt in `~/.local/bin/gh`, angemeldet als oweindl (HTTPS, `gh auth setup-git`). Push und Issues laufen darüber.
-- Vault-Konventionen: Übersichtsdatei + Datei je Eintrag (`Fixliste.md` → `Fixliste/FIX-0nn.md`), Wikilinks mit Alias/Pfad, Eigenschaften teils als `- Status: …` im Text, teils Frontmatter, Checkboxen in Akzeptanzkriterien. Größte Dateien: Archiv ~200 KB, `Phasenplan.md` 140 KB.
-- Regeln für Claude Code stehen heute oben in `ContentManagementTool/Fixliste.md` (Vorlage für das `guide`-Werkzeug).
+- `gh` liegt in `~/.local/bin/gh`, angemeldet als oweindl (HTTPS). Push und Issues laufen darüber.
+- Schreibende Tests nur gegen eine Kopie des Vaults mit eigener Konfiguration (`push = false`, anderer Port).
+- Vault-Konventionen: Übersichtsdatei plus Datei je Eintrag (`Fixliste.md` → `Fixliste/FIX-0nn.md`, `Features.md` → `Features/nn-slug.md`), Einträge in den Übersichten als Überschrift mit Wikilink.

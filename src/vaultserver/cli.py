@@ -99,14 +99,57 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("broken-links")
     p = sub.add_parser("keys", help="Eigenschafts-Schlüssel mit Häufigkeit")
     p.add_argument("--min", type=int, default=2, help="mindestens in so vielen Notizen"); p.add_argument("--folder")
+    p = sub.add_parser("serve", help="Server starten (Web, REST, MCP)")
+    p.add_argument("--host"); p.add_argument("--port", type=int)
+    sub.add_parser("hash-password", help="Passwort-Hash für [server.users] erzeugen (liest Passwort von stdin)")
+    sub.add_parser("new-token", help="Zufälliges Token für [server.tokens] erzeugen")
+    p = sub.add_parser("lint", help="Regeln, Links, Nummern prüfen"); p.add_argument("--area")
+    p = sub.add_parser("overview", help="Automatische Übersicht erneuern"); p.add_argument("area", nargs="?")
+    sub.add_parser("link-commits", help="Commits der Code-Repos in Notizen eintragen")
+    p = sub.add_parser("changes", help="Änderungen seit Commit/Zeitpunkt"); p.add_argument("since")
+    sub.add_parser("embed", help="Embeddings für semantische Suche berechnen")
     p = sub.add_parser("bench", help="Neuaufbau und Suchzeiten messen")
     p.add_argument("--rounds", type=int, default=20); p.add_argument("terms", nargs="*")
 
     args = ap.parse_args(argv)
+    if args.cmd == "hash-password":
+        import getpass
+        from .web import hash_password
+        pw = getpass.getpass("Passwort: ") if sys.stdin.isatty() else sys.stdin.readline().rstrip("\n")
+        print(hash_password(pw))
+        return 0
+    if args.cmd == "new-token":
+        import secrets
+        print(secrets.token_urlsafe(32))
+        return 0
     if not Path(args.config).exists():
         print(f"Konfiguration fehlt: {args.config} (Vorlage: vaultserver.example.toml)", file=sys.stderr)
         return 2
-    idx = Index(Config.load(args.config))
+    config = Config.load(args.config)
+    if args.cmd == "serve":
+        import logging
+        import uvicorn
+        from .web import create_app
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+        uvicorn.run(create_app(config), host=args.host or config.host, port=args.port or config.port,
+                    log_level="info", access_log=False)
+        return 0
+    if args.cmd in ("lint", "overview", "link-commits", "changes", "embed"):
+        from .store import Store
+        store = Store(config)
+        store.index.sync()
+        match args.cmd:
+            case "lint": data = store.lint(args.area)
+            case "overview":
+                data = store.refresh_overview(args.area, "cli") if args.area else store.refresh_status("cli")
+            case "link-commits": data = store.link_commits("cli")
+            case "changes": data = store.changes_since(args.since)
+            case "embed":
+                from .semantic import Semantic
+                data = {"new": Semantic(store.index, config.ollama_url, config.ollama_model).update()}
+        _out(data, args.json)
+        return 0
+    idx = Index(config)
     try:
         if args.cmd == "index":
             st = idx.rebuild() if args.rebuild else idx.sync()

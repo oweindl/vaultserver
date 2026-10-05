@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VaultServer</title>
+<link rel="stylesheet" href="/static/vendor/codemirror.min.css">
+<link rel="stylesheet" href="/static/vendor/addon_hint_show-hint.min.css">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<div id="app">
+  <header>
+    <button id="toggle-tree" title="Ordner">☰</button>
+    <span class="logo">VaultServer</span>
+    <form class="search" id="search-form">
+      <input type="search" id="q" placeholder="Suchen …  (Strg+K)" autocomplete="off">
+      <label><input type="checkbox" id="q-archive"> Archiv</label>
+    </form>
+    <span class="spacer"></span>
+    <button id="btn-new" title="Neue Notiz oder neuer Eintrag">Neu</button>
+    <button id="btn-recent">Änderungen</button>
+    <button id="btn-tasks">Aufgaben</button>
+    <button id="btn-lint">Prüfung</button>
+    <button id="btn-logout">Abmelden</button>
+    <button id="btn-more" title="Mehr">⋯</button>
+  </header>
+  <main>
+    <nav id="tree"></nav>
+    <section id="center"><div id="content"></div></section>
+    <aside id="side"></aside>
+  </main>
+</div>
+
+<div id="menu"></div>
+<div id="toast"></div>
+
+<div id="login">
+  <form id="login-form">
+    <h1>VaultServer</h1>
+    <input type="text" id="login-user" placeholder="Benutzer" autocomplete="username" required>
+    <input type="password" id="login-pw" placeholder="Passwort" autocomplete="current-password" required>
+    <button class="primary" type="submit">Anmelden</button>
+    <div class="err" id="login-err"></div>
+  </form>
+</div>
+
+<dialog id="dlg"><form method="dialog" id="dlg-form"></form></dialog>
+
+<script src="/static/vendor/codemirror.min.js"></script>
+<script src="/static/vendor/addon_mode_overlay.min.js"></script>
+<script src="/static/vendor/mode_markdown_markdown.min.js"></script>
+<script src="/static/vendor/mode_yaml_yaml.min.js"></script>
+<script src="/static/vendor/mode_yaml-frontmatter_yaml-frontmatter.min.js"></script>
+<script src="/static/vendor/addon_hint_show-hint.min.js"></script>
+<script src="/static/vendor/addon_edit_continuelist.min.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>

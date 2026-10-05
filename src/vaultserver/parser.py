@@ -16,9 +16,10 @@ FENCE_RE = re.compile(r"^[ \t]*(```|~~~)")
 TASK_RE = re.compile(r"^[ \t]*[-*+][ \t]+\[([ xX])\][ \t]+(.*)$")
 # "- Schlüssel: Wert", auch "- **Schlüssel:** Wert"; Schlüssel max. 4 Wörter
 PROP_RE = re.compile(
-    r"^[ \t]*[-*+][ \t]+(?!\[[ xX]\])"
+    r"^[-*+][ \t]+(?!\[[ xX]\])"       # nur Aufzählungen ohne Einrückung; eingerückte sind Unterpunkte
     r"([A-Za-zÄÖÜäöüß][\wÄÖÜäöüß./-]*(?:[ \t][\wÄÖÜäöüß./-]+){0,3})"
-    r"[ \t]*:[ \t]+(\S.*)$"
+    r"(?:[ \t]*\([^)\n]*\))?"          # "- Ist (Oliver, 2026-10-05): …" -> Schlüssel "Ist"
+    r"[ \t]*:(?:[ \t]+(\S.*))?[ \t]*$"   # leerer Wert erlaubt ("- Akzeptanzkriterien:" + Liste)
 )
 WIKILINK_RE = re.compile(r"(!?)\[\[([^\]\n]+?)\]\]")
 MDLINK_RE = re.compile(r"(!?)\[([^\]\n]*)\]\(([^)\s]+)\)")
@@ -156,7 +157,10 @@ def parse_note(text: str, stem: str) -> ParsedNote:
         m = None if in_fence else HEADING_RE.match(line)
         if m:
             close(lineno - 1)
-            level, heading = len(m.group(1)), m.group(2).strip()
+            level = len(m.group(1))
+            # Wikilinks in Überschriften als angezeigter Text: "### [[FIX-001|FIX-001 · X]]" -> "FIX-001 · X"
+            heading = WIKILINK_RE.sub(lambda w: (_parse_wikilink(w.group(2))[2] or _parse_wikilink(w.group(2))[0]),
+                                      m.group(2)).strip()
             if level == 1 and not first_h1:
                 first_h1 = heading
             while stack and stack[-1][0] >= level:
@@ -172,21 +176,22 @@ def parse_note(text: str, stem: str) -> ParsedNote:
                 text="",
             )
             buf = [line]
-            continue
-        buf.append(line)
+        else:
+            buf.append(line)
         if in_fence:
             continue
 
         sord = cur.ord
-        t = TASK_RE.match(line)
-        if t:
+        t = None if m else TASK_RE.match(line)
+        if m:
+            pass  # Überschrift: nur Links auswerten
+        elif t:
             note.tasks.append(Task(sord, lineno, t.group(2).strip(), t.group(1) != " "))
         else:
             p = PROP_RE.match(line.replace("**", "").replace("__", ""))
-            if p and not p.group(2).startswith("//") and not ENUM_KEY_RE.match(p.group(1)):
-                note.properties.append(
-                    Property(p.group(1).strip(), p.group(2).strip(), "inline", sord, lineno)
-                )
+            value = (p.group(2) or "").strip() if p else ""
+            if p and not value.startswith("//") and not ENUM_KEY_RE.match(p.group(1)):
+                note.properties.append(Property(p.group(1).strip(), value, "inline", sord, lineno))
 
         plain = INLINE_CODE_RE.sub("", line)
         for wm in WIKILINK_RE.finditer(plain):
@@ -200,7 +205,7 @@ def parse_note(text: str, stem: str) -> ParsedNote:
             note.links.append(
                 Link(sord, lineno, target.replace("%20", " "), section, mm.group(2), mm.group(1) == "!", "md")
             )
-        if not HEADING_RE.match(line):
+        if not m:
             note.tags.update(m.group(1) for m in TAG_RE.finditer(WIKILINK_RE.sub("", plain)))
 
     close(len(lines))

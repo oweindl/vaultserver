@@ -1,6 +1,6 @@
 # VaultServer – Konzept (Obsidian-Ersatz)
 
-Stand: 2026-10-05 · Live-Version: [Claude Doc](https://claude.ai/code/artifact/c6090794-dc51-42e7-9285-c325fdac0748)
+Stand: 2026-10-05 · umgesetzt, Betrieb siehe [BETRIEB.md](BETRIEB.md) · Live-Version: [Claude Doc](https://claude.ai/code/artifact/c6090794-dc51-42e7-9285-c325fdac0748)
 
 ## Ziel und Problem
 
@@ -139,7 +139,7 @@ claude mcp add --transport http vaultserver http://<ubuntu-rechner>:8100/mcp --h
 3. **Web-Viewer:** Ordnerbaum, gerenderte Notiz, Suche, Backlinks, nur lesend.
 4. **Web-Editor:** Bearbeiten, Anlegen, Verschieben mit Link-Nachzug, Konfliktanzeige.
 5. **Umstellung:** Betrieb auf dem Ubuntu-Rechner, alle Rechner umstellen, Obsidian-Plugin abschalten.
-6. **Optional:** semantische Suche über lokales Ollama (Embeddings in `sqlite-vec`).
+6. **Optional:** semantische Suche über lokales Ollama. Umgesetzt mit Embeddings als Blob in SQLite und Skalarprodukt in numpy; bei rund 2000 Abschnitten braucht es kein `sqlite-vec`.
 
 ## Entscheidungen (2026-10-05)
 

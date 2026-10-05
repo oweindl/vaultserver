@@ -1,0 +1,20 @@
+# systemd-Benutzerdienst. Installation (ohne root, Linger muss aktiv sein):
+#   mkdir -p ~/.config/systemd/user && cp deploy/vaultserver.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload && systemctl --user enable --now vaultserver
+#   loginctl enable-linger $USER     # einmalig, damit der Dienst ohne Anmeldung läuft
+[Unit]
+Description=VaultServer (Markdown-Vault: Web, REST, MCP auf Port 8100)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/projects/vaultserver
+ExecStart=%h/projects/vaultserver/.venv/bin/vaultserver -c %h/projects/vaultserver/vaultserver.toml serve
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=PYTHONUNBUFFERED=1
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

@@ -1,31 +1,46 @@
 # VaultServer
 
-Ein immer erreichbarer Ersatz für den Obsidian-MCP-Zugriff: ein MCP-Server mit schnellem Suchindex über einem Markdown-Vault, plus Web-Viewer und -Editor im Browser.
+Ein ständig laufender Ersatz für den Obsidian-MCP-Zugriff: ein Dienst mit Suchindex über einem Markdown-Vault, MCP-Server für Claude Code und Web-Oberfläche zum Lesen und Bearbeiten im Browser.
 
-**Status:** Phase 1 (Kern und Index) – siehe [docs/KONZEPT.md](docs/KONZEPT.md) und [docs/HANDOFF.md](docs/HANDOFF.md).
+Die Markdown-Dateien im Git-Repo bleiben die Quelle der Wahrheit. Ein SQLite-FTS5-Index zerlegt sie in Abschnitte, Links, Eigenschaften, Tags und Aufgaben, damit Agenten in Millisekunden finden und nur die Abschnitte lesen, die sie brauchen. Jede Änderung wird ein Git-Commit mit dem Namen des Rechners, der sie gemacht hat.
 
-## Schnellstart
+**Status:** Phasen 1 bis 6 umgesetzt, Betrieb auf `webtest` (192.168.1.32:8100). Konzept: [docs/KONZEPT.md](docs/KONZEPT.md), Betrieb: [docs/BETRIEB.md](docs/BETRIEB.md), Übergabe: [docs/HANDOFF.md](docs/HANDOFF.md).
+
+## Ein Port für alles
+
+| Pfad | Wofür |
+| --- | --- |
+| `http://<host>:8100/` | Web-Oberfläche (Anmeldung mit Benutzer und Passwort) |
+| `http://<host>:8100/mcp` | MCP-Server (Streamable HTTP, Bearer-Token je Rechner) |
+| `http://<host>:8100/api/…` | REST für die Web-Oberfläche |
+
+Einbindung in Claude Code:
+
+```
+claude mcp add --scope user --transport http vaultserver http://192.168.1.32:8100/mcp --header "Authorization: Bearer <token>"
+```
+
+## MCP-Werkzeuge
+
+Lesen: `guide`, `search`, `query`, `outline`, `read`, `list`, `backlinks`, `tasks`, `recent`, `changes_since`, `lint`, `property_keys`, `claims`.
+Schreiben: `write`, `patch_section`, `set_property`, `move`, `delete`, `create_from_template`, `claim`, `release`, `refresh_overview`, `link_commits`.
+
+Schreibende Aufrufe brauchen die zuletzt gelesene Version (`base_version`). Hat sich die Notiz inzwischen geändert, kommt der aktuelle Stand zurück. `patch_section` meldet nur dann einen Konflikt, wenn sich genau der betroffene Abschnitt geändert hat. In Bereichen mit Regeln (Fixliste, Features) lehnt der Server Änderungen ab, die Pflichtfelder entfernen oder unbekannte Werte setzen.
+
+## Web-Oberfläche
+
+Ordnerbaum mit Ziehen und Ablegen und Kontextmenü, gerenderte Notizen mit Wikilinks, Bildern, HTML-Mockups und anklickbaren Checkboxen, Gliederung, Eigenschaften (Status direkt umschaltbar), Backlinks und Git-Verlauf. Dazu Suche (Strg+K), Editor mit Wikilink-Vervollständigung nach `[[`, Konfliktansicht, neue FIX- und Feature-Einträge aus der Vorlage, Prüfung und Änderungsliste. Funktioniert auch auf dem Handy.
+
+## Entwicklung
 
 ```
 python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'
-cp vaultserver.example.toml vaultserver.toml   # vault_path anpassen
-.venv/bin/vaultserver index --rebuild
-.venv/bin/vaultserver search "pdf export"
-.venv/bin/vaultserver query "Status!=erledigt" "Priorität=hoch" --folder Fixliste
-.venv/bin/vaultserver read Features/34-Signatur.md --section "Stufe 2"
-.venv/bin/vaultserver bench
+cp vaultserver.example.toml vaultserver.toml   # Pfade, Tokens, Benutzer anpassen
+.venv/bin/pytest
+.venv/bin/vaultserver serve
 ```
 
-## Idee in einem Satz
-
-Markdown-Dateien in einem Git-Repo bleiben die Quelle der Wahrheit; ein SQLite-FTS5-Index zerlegt sie in Abschnitte, Links und Eigenschaften, damit Agenten in Millisekunden finden und nur die Abschnitte lesen, die sie brauchen.
-
-## Bausteine
-
-- **Kern-Dienst** (Python, FastAPI): Markdown parsen, Index pflegen, Schreiben mit Versionsprüfung, ein Git-Commit pro Änderung
-- **MCP-Endpunkt** (Streamable HTTP, Bearer-Token): `search`, `query`, `outline`, `read`, `list`, `backlinks`, `tasks`, `recent`, `write`, `patch_section`, `set_property`, `move`, `delete`
-- **Web-Oberfläche**: Ordnerbaum, gerenderte Notizen mit Wikilinks, Suche, Backlinks, Markdown-Editor
-- **Betrieb**: systemd-Dienst auf Ubuntu, optional Docker
+Die Kommandozeile kann auch ohne Server suchen und prüfen, zum Beispiel `vaultserver query "Status!=@erledigt" --folder ContentManagementTool/Fixliste`, `vaultserver lint` oder `vaultserver bench`. `scripts/smoke.py` prüft einen laufenden Server nur lesend.
 
 ## Lizenz
 

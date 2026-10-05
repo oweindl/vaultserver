@@ -1,25 +1,97 @@
-# Kopieren nach vaultserver.toml und anpassen.
-vault_path = "/srv/vault"
+# VaultServer-Konfiguration. Kopieren nach vaultserver.toml und anpassen.
+vault_path = "~/obsidian-oweindl"
 db_path = "data/index.sqlite"
 
-# Ordner, die die Suche nur auf Wunsch einbezieht (Idee 7)
+# Ordner, die Suche und Abfragen nur auf Wunsch einbeziehen (Idee 7)
 archive_folders = ["Archiv"]
-
 # Nie indexieren
 exclude = [".git", ".obsidian", ".trash"]
+# Notiz mit automatischem Statusblock (Idee 5)
+status_note = "ContentManagementTool/Status.md"
+# Commits der Code-Repos alle n Minuten in Notizen eintragen (Idee 8), 0 = nur auf Aufruf (Werkzeug link_commits)
+commit_link_minutes = 0
 
-# Freitext-Werte auf kanonische Werte abbilden (Regex, erste passende Regel gewinnt).
-# Der Rohtext bleibt in der Datei unverändert; nur der Index nutzt den kanonischen Wert.
+[server]
+host = "0.0.0.0"
+port = 8100
+watch_seconds = 3          # Datei-Wächter
+claim_minutes = 120        # Reservierung verfällt ohne Änderung nach …
+# Rechnername = Token (vaultserver new-token)
+[server.tokens]
+# ubuntu1 = "…"
+# Web-Anmeldung: Benutzer = scrypt-Hash (vaultserver hash-password)
+[server.users]
+# oliver = "scrypt$…"
+
+[git]
+commit = true              # jede Änderung ein Commit
+pull_seconds = 60          # 0 = kein Pull
+push = true                # nach Änderungen zum Remote pushen
+remote = "origin"
+
+[semantic]                 # Phase 6, braucht Ollama mit Embedding-Modell
+enabled = false
+ollama_url = "http://localhost:11434"
+model = "nomic-embed-text"
+
+[[code_repos]]
+name = "PDFCloud-Pro"
+path = "~/pdfcloud-pro"
+url = "https://github.com/oweindl/PDFCloud-Pro"
+
+# Freitext-Werte auf kanonische Werte abbilden (Regex auf Kleinschreibung, erste passende Regel gewinnt).
+# Der Text in der Datei bleibt unverändert; Index, Abfragen und Regeln nutzen den kanonischen Wert.
+# Werte entsprechen den Status-Werten in Fixliste.md: offen · in Arbeit · erledigt (Test) · abgenommen · produktiv · blockiert
 [canonical]
 status = [
-  { match = "ausgerollt|^produktiv", value = "erledigt-ausgerollt" },
-  { match = "^erledigt \\(abgenommen", value = "erledigt-abgenommen" },
-  { match = "^stufe\\b.*erledigt \\(test\\)", value = "teilweise-test" },
-  { match = "^(rest\\b.*)?erledigt \\(test\\)", value = "erledigt-test" },
-  { match = "^behoben", value = "behoben-pruefen" },
-  { match = "^erledigt\\b", value = "erledigt" },
-  { match = "^(offen|geplant|entwurf|aktiv|fertig|in arbeit)\\b", value = "\\1" },
+  { match = "^produktiv|ausgerollt", value = "produktiv" },
+  { match = "^blockiert", value = "blockiert" },
+  { match = "abgenommen", value = "abgenommen" },
+  { match = "^stufe\\b.*erledigt \\(test\\)", value = "teilweise (test)" },
+  { match = "erledigt \\(test\\)", value = "erledigt (test)" },
+  { match = "^behoben|nur noch prüfen", value = "offen" },
+  { match = "^in arbeit", value = "in arbeit" },
+  { match = "^(offen|geplant|entwurf|aktiv|fertig)\\b", value = "\\1" },
 ]
 "priorität" = [
   { match = "^(hoch|mittel|niedrig)\\b", value = "\\1" },
 ]
+
+# In Abfragen als "Status=@erledigt" / "Status!=@erledigt"
+[groups.status]
+erledigt = ["erledigt (test)", "abgenommen", "produktiv", "fertig"]
+offen = ["offen", "in arbeit", "blockiert", "teilweise (test)", "geplant", "entwurf"]
+
+[[areas]]
+name = "Fixliste"
+folder = "ContentManagementTool/Fixliste"
+overview = "ContentManagementTool/Fixliste.md"
+rules_section = "Regeln für Claude Code"
+id_regex = "^FIX-(\\d+)"
+filename = "FIX-{n:03d}.md"
+heading = "# FIX-{n:03d} · {title}"
+template = "> Zurück zur Übersicht: [[Fixliste]]\n\n{fields}\n"
+overview_entry = "### [[{stem}|{stem} · {title}]]\nPriorität: {priorität} · Status: {status}\n\n{summary}"
+overview_section = "Offen"
+commit_regex = "\\bFIX-(\\d{3})\\b|(?<=FIX-\\d{3})/(\\d{3})\\b"
+required = ["Priorität", "Bereich", "Status", "Ist", "Soll", "Akzeptanzkriterien", "Wenn unklar"]
+defaults = { Status = "offen", Umsetzung = "(füllt Claude Code aus – Commit, Änderungen, Test)" }
+overview_columns = ["Priorität", "Status", "Bereich"]
+[areas.allowed]
+status = ["offen", "in arbeit", "erledigt (test)", "abgenommen", "produktiv", "blockiert"]
+"priorität" = ["hoch", "mittel", "niedrig"]
+
+[[areas]]
+name = "Features"
+folder = "ContentManagementTool/Features"
+overview = "ContentManagementTool/Features.md"
+id_regex = "^(\\d+)-"
+filename = "{n:02d}-{slug}.md"
+heading = "# Feature {n} · {title}"
+template = "> Zurück zur Übersicht: [[Features]]\n\n{fields}\n"
+overview_entry = "## {n}. [[{stem}|{title}]]\n\n{summary}"
+overview_before = "Priorisierung"
+commit_regex = "\\bFeature (\\d+)\\b"
+overview_columns = ["Status"]
+[areas.allowed]
+status = ["offen", "in arbeit", "teilweise (test)", "erledigt (test)", "abgenommen", "produktiv", "blockiert", "geplant"]
