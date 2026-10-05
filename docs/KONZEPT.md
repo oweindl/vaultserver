@@ -74,7 +74,7 @@ Alle Schreibzugriffe laufen durch den Kern-Dienst. Er schreibt die Datei, aktual
 | `aliases` | Notiz, Alias | Wikilinks wie in Obsidian auflösen |
 | `attachments` | Pfad, Typ, Größe | Bilder, PDFs und HTML-Mockups im Viewer zeigen |
 
-Welche Zeilen als Eigenschaften gelten, legt eine kleine Konfiguration fest (zum Beispiel `Status`, `Priorität`, `Bereich`). Der Index ist vollständig aus den Dateien ableitbar und per Befehl in Sekunden neu aufbaubar.
+Jede Zeile der Form `- Schlüssel: Wert` und jeder Frontmatter-Eintrag wird als Eigenschaft indexiert, ohne feste Liste. Eine kleine Konfiguration legt nur fest, welche Werte gleichbedeutend sind (z. B. „erledigt (Test)“ → erledigt). Der Index ist vollständig aus den Dateien ableitbar und per Befehl in Sekunden neu aufbaubar.
 
 ## MCP-Werkzeuge
 
@@ -110,10 +110,24 @@ Ein Agent sucht erst oder holt die Gliederung und liest dann nur den passenden A
 
 Eine kleine Single-Page-App, ausgeliefert vom selben FastAPI-Dienst, mit derselben Kernlogik wie der MCP-Server.
 
+### Ein Port für alles (8100)
+
+| Pfad | Wofür |
+| --- | --- |
+| `http://<ubuntu-rechner>:8100/` | Web-Viewer und Editor (Anmeldung mit Benutzer/Passwort) |
+| `http://<ubuntu-rechner>:8100/mcp` | MCP-Server für Claude Code (Bearer-Token je Rechner) |
+| `http://<ubuntu-rechner>:8100/api/…` | REST-API für den Browser |
+
+Einbindung in Claude Code je Rechner:
+
+```
+claude mcp add --transport http vaultserver http://<ubuntu-rechner>:8100/mcp --header "Authorization: Bearer <token>"
+```
+
 ## Betrieb, Sicherheit und Migration
 
 - **Migration:** `git clone` des bestehenden Vault-Repos auf den Ubuntu-Rechner.
-- **Betrieb:** systemd-Dienst mit Neustart bei Fehler; optional Docker. Konfiguration in einer Datei (Vault-Pfad, Port, Tokens, Eigenschaftsschlüssel).
+- **Betrieb:** systemd-Dienst mit Neustart bei Fehler; optional Docker. Port 8100. Konfiguration in einer Datei (Vault-Pfad, Port, Tokens, Werte-Normalisierung).
 - **Sicherheit:** nur im LAN; Bearer-Token je Rechner; Web-Oberfläche mit Anmeldung; von außen nur über VPN.
 - **Datensicherung:** regelmäßiger Push zum Git-Remote; der Index braucht keine Sicherung.
 - **Übergang:** Obsidian kann mit Obsidian-Git parallel weiterlaufen; der Datei-Wächter nimmt eingehende Änderungen auf.
@@ -127,9 +141,27 @@ Eine kleine Single-Page-App, ausgeliefert vom selben FastAPI-Dienst, mit derselb
 5. **Umstellung:** Betrieb auf dem Ubuntu-Rechner, alle Rechner umstellen, Obsidian-Plugin abschalten.
 6. **Optional:** semantische Suche über lokales Ollama (Embeddings in `sqlite-vec`).
 
+## Entscheidungen (2026-10-05)
+
+- Host: Ubuntu-Rechner, Port 8100 für Web, REST und MCP.
+- Name: VaultServer, Repo `oweindl/vaultserver`, MIT-Lizenz.
+- Alle `- Schlüssel: Wert`-Zeilen und Frontmatter-Felder sind Eigenschaften.
+- Die ausführenden Claude-Code-Instanzen setzen und nutzen diese Eigenschaften konsequent; der Server setzt das durch (Ideen 1 und 2).
+
+## Zusatzfunktionen (Ideen)
+
+1. **`guide`:** liefert Arbeitsregeln je Bereich und erlaubte Eigenschaften/Werte; jeder Agent ruft es zu Beginn auf, ein `CLAUDE.md`-Block auf allen Rechnern verweist darauf.
+2. **`create_from_template`:** legt `FIX-0nn` / `Feature nn` mit Pflichtfeldern und automatischer Nummer an und trägt sie in die Übersicht ein; fehlende Pflichtfelder werden abgelehnt.
+3. **`claim`:** reserviert einen Eintrag (Status „in Arbeit“, Rechner, Zeit); verfällt nach einer Frist ohne Änderung.
+4. **`changes_since`:** geänderte Notizen und Abschnitte seit Commit/Zeitpunkt, für Nachtläufe.
+5. **Automatische Übersichten:** `Features.md`, `Fixliste.md`, `Status.md` aus Eigenschaften erzeugt.
+6. **`lint`:** kaputte Wikilinks, fehlende Pflichtfelder, doppelte Nummern, unbekannte Statuswerte.
+7. **Archiv ausblenden:** Ordner wie `Archiv/` nur auf Wunsch in der Suche.
+8. **Commit-Verknüpfung:** Commits `FIX-054: …` im Code-Repo erscheinen im Abschnitt „Umsetzung“.
+
 ## Offene Punkte
 
-- [ ] Host-Rechner (Hostname/IP) und freier Port
+- [ ] GitHub-Issues für Phasen und Funktionen anlegen
+- [ ] Obsidian parallel als Editor weiterverwenden oder nicht
 - [ ] Git-Remote des Vaults und Push-Berechtigung des Servers
-- [ ] Obsidian in der Übergangszeit parallel schreibend oder harte Umstellung
-- [ ] Weitere abfragbare Eigenschaftsschlüssel außer `Status`, `Priorität`, `Bereich`
+- [ ] Umfang der Zusatzfunktionen 1–8 final bestätigen
