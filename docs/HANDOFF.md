@@ -41,12 +41,11 @@ Diese Datei übergibt den Stand an die nächste Claude-Sitzung. Start mit: „Li
 
 ## Nächste Schritte
 
-1. Vault-Repo klonen, `vaultserver bench` gegen den echten Vault laufen lassen.
-2. GitHub-Issues anlegen: je Phase ein Epic (Phasen 1–6), darunter je MCP-Werkzeug und je Zusatzfunktion ein Issue.
-3. Phase 2: MCP-Server (FastAPI + Streamable HTTP) auf Port 8100, Lesewerkzeuge, dann Schreiben mit Versionsprüfung und Git-Commit.
+1. GitHub-Issues: angelegt (#1–#6 Epics je Phase, #1 geschlossen; #7–#19 MCP-Werkzeuge; #20–#27 Zusatzfunktionen 1–8, alle unter Epic #2).
+2. Phase 2 (#2): MCP-Server (FastAPI + Streamable HTTP) auf Port 8100, Lesewerkzeuge, dann Schreiben mit Versionsprüfung und Git-Commit.
 
 ## Hinweise für die nächste Sitzung
 
-- Die Sitzung braucht `oweindl/vaultserver` als ausgewähltes Repository, sonst blockiert der Git-Proxy Push und `gh`.
+- `gh` liegt in `~/.local/bin/gh`, angemeldet als oweindl (HTTPS, `gh auth setup-git`). Push und Issues laufen darüber.
 - Vault-Konventionen: Übersichtsdatei + Datei je Eintrag (`Fixliste.md` → `Fixliste/FIX-0nn.md`), Wikilinks mit Alias/Pfad, Eigenschaften teils als `- Status: …` im Text, teils Frontmatter, Checkboxen in Akzeptanzkriterien. Größte Dateien: Archiv ~200 KB, `Phasenplan.md` 140 KB.
 - Regeln für Claude Code stehen heute oben in `ContentManagementTool/Fixliste.md` (Vorlage für das `guide`-Werkzeug).

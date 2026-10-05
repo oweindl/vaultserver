@@ -161,7 +161,7 @@ claude mcp add --transport http vaultserver http://<ubuntu-rechner>:8100/mcp --h
 
 ## Offene Punkte
 
-- [ ] GitHub-Issues für Phasen und Funktionen anlegen
+- [x] GitHub-Issues für Phasen und Funktionen anlegen (#1–#27)
 - [x] Obsidian wird abgelöst; VaultServer ist einziger Schreiber
 - [x] Vault-Git: Clone/Push über SSH-Key des Hosts `webtest` (Repo-Name noch offen)
 - [x] Zusatzfunktionen 1–8 alle im Umfang
