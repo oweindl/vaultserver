@@ -1,0 +1,54 @@
+<!-- Browsersymbol, Vorlage: Vault VaultServer/browsericon.md -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="doc" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#C084FC"/>
+      <stop offset="50%" stop-color="#8B5CF6"/>
+      <stop offset="100%" stop-color="#4F46E5"/>
+    </linearGradient>
+    <linearGradient id="crystal" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#67E8F9"/>
+      <stop offset="100%" stop-color="#00E6A7"/>
+    </linearGradient>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="1.5" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <!-- Hintergrund -->
+  <rect width="64" height="64" rx="14" fill="#050816"/>
+  <!-- Dokument -->
+  <path d="
+      M18 10
+      H38
+      L48 20
+      V54
+      H18
+      Z"
+      fill="#0B1026"
+      stroke="url(#doc)"
+      stroke-width="2.8"
+      filter="url(#glow)"/>
+  <!-- Ecke -->
+  <path d="
+      M38 10
+      V20
+      H48"
+      fill="none"
+      stroke="#C084FC"
+      stroke-width="2"/>
+  <!-- Kristall -->
+  <polygon
+      points="
+      32,24
+      40,29
+      40,39
+      32,44
+      24,39
+      24,29"
+      fill="url(#crystal)"
+      filter="url(#glow)"/>
+</svg>

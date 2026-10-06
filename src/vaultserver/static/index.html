@@ -4,6 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>VaultServer</title>
+<link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+<link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32.png">
+<link rel="icon" type="image/png" sizes="192x192" href="/static/favicon-192.png">
+<link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+<meta name="theme-color" content="#050816">
 <link rel="stylesheet" href="/static/vendor/codemirror.min.css">
 <link rel="stylesheet" href="/static/vendor/addon_hint_show-hint.min.css">
 <link rel="stylesheet" href="/static/app.css">
@@ -12,7 +17,7 @@
 <div id="app">
   <header>
     <button id="toggle-tree" title="Ordner">☰</button>
-    <span class="logo">VaultServer</span><span id="live" title="Live-Verbindung wird aufgebaut"></span>
+    <span class="logo"><img src="/static/favicon.svg" alt="" width="22" height="22">VaultServer</span><span id="live" title="Live-Verbindung wird aufgebaut"></span>
     <form class="search" id="search-form">
       <input type="search" id="q" placeholder="Suchen …  (Strg+K)" autocomplete="off">
       <label><input type="checkbox" id="q-archive"> Archiv</label>

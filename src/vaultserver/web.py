@@ -660,6 +660,10 @@ def create_app(config: Config, start_background: bool = True) -> FastAPI:
     def health():
         return {"ok": True, "notes": svc.index.stats()["notes"], "last_error": svc.last_error}
 
+    @app.get("/favicon.ico", include_in_schema=False)
+    def favicon():
+        return FileResponse(STATIC / "favicon-32.png", media_type="image/png", headers={"Cache-Control": "max-age=86400"})
+
     @app.get("/static/{name:path}")
     def static(name: str):
         f = (STATIC / name).resolve()

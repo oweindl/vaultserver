@@ -270,3 +270,6 @@ dialog.opt[open] { display: flex; flex-direction: column; }
 .att-view video { max-width: 100%; max-height: calc(100vh - 170px); display: block; margin: 0 auto; }
 .att-view pre { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--code); padding: 10px; border-radius: 6px; font: 12.5px/1.5 var(--mono); }
 .md img[data-file] { cursor: zoom-in; }
+
+.logo { display: inline-flex; align-items: center; gap: 7px; }
+.logo img { width: 22px; height: 22px; border-radius: 5px; flex: none; }
