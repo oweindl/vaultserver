@@ -266,12 +266,39 @@ def build_mcp(svc: Service) -> MCPServer:
         return _guard(lambda: sc.rel(st.move(sc.full(source), sc.full(target), agent_from(ctx, svc), message=message)))()
 
     @mcp.tool(annotations=DEL)
-    def delete(path: str, base_version: str, message: str | None = None,
+    def delete(path: str, base_version: str | None = None, message: str | None = None,
                ctx: Context | None = None) -> dict[str, Any]:
-        """Notiz löschen (bleibt in der Git-Historie)."""
+        """Notiz, Anhang oder Ordner in den Papierkorb (RecycleBin) schieben – mit Herkunft, jederzeit mit
+        restore an die alte Stelle zurückholbar. Für Notizen base_version aus read mitgeben."""
         sc = scope_of(ctx)
-        return _guard(lambda: sc.rel(st.delete(sc.full(path), agent_from(ctx, svc),
-                                               base_version=base_version, message=message)))()
+        return _guard(lambda: sc.rel(st.trash(sc.full(path), agent_from(ctx, svc), base_version=base_version,
+                                              message=message)))()
+
+    @mcp.tool(annotations=RO)
+    def recycle_bin(ctx: Context | None = None) -> list[dict[str, Any]]:
+        """Inhalt des Papierkorbs: id, ursprünglicher Pfad, Art, wann und von wem gelöscht, ob die alte
+        Stelle inzwischen wieder belegt ist."""
+        sc = scope_of(ctx)
+        return sc.rel([e for e in st.bin_list() if sc.inside(e["original"])])
+
+    @mcp.tool(annotations=RW)
+    def restore(id: str, ctx: Context | None = None) -> dict[str, Any]:
+        """Papierkorb-Eintrag (id aus recycle_bin) an die alte Stelle zurückholen. Ordner werden mit einem
+        vorhandenen Ordner zusammengeführt; existiert eine Datei dort schon, passiert nichts."""
+        sc = scope_of(ctx)
+
+        def run():
+            entry = next((e for e in st.bin_list() if e["id"] == id), None)
+            if not entry or not sc.inside(entry["original"]):
+                raise KeyError(f"Papierkorb-Eintrag nicht gefunden: {id}")
+            return sc.rel(st.restore(id, agent_from(ctx, svc)))
+        return _guard(run)()
+
+    @mcp.tool(annotations=RW)
+    def create_folder(path: str, ctx: Context | None = None) -> dict[str, Any]:
+        """Leeren Ordner anlegen (bleibt über eine .gitkeep-Datei in Git erhalten)."""
+        sc = scope_of(ctx)
+        return _guard(lambda: sc.rel(st.mkdir(sc.full(path), agent_from(ctx, svc))))()
 
     @mcp.tool(annotations=RW)
     def create_from_template(area: str, title: str, fields: dict[str, Any], summary: str = "",

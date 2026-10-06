@@ -8,7 +8,11 @@ const slug = (s) => s.toLowerCase().replace(/[^\p{L}\p{N}_\- ]/gu, "").trim().re
 const fmtDate = (s) => { const d = typeof s === "number" ? new Date(s * 1000) : new Date(s); return d.toLocaleString("de-DE", { dateStyle: "short", timeStyle: "short" }); };
 const kb = (n) => n > 1024 ? `${(n / 1024).toFixed(n > 10240 ? 0 : 1)} KB` : `${n} B`;
 
-const state = { tree: null, open: new Set(JSON.parse(localStorage.getItem("vs-open") || "[]")), note: null, editor: null, dirty: false, me: null };
+const state = { tree: null, open: new Set(JSON.parse(localStorage.getItem("vs-open") || "[]")), note: null, editor: null, dirty: false, me: null,
+  vault: localStorage.getItem("vs-vault") || "", projects: [], binCount: 0 };
+// gewählter Vault (Stammordner) – "" = all; filtert Baum, Suche, Änderungen, Aufgaben, Prüfung, Papierkorb
+const inVault = (p) => !state.vault || p === state.vault || String(p || "").startsWith(state.vault + "/");
+const vaultLabel = () => (state.vault ? ` · ${state.vault}` : "");
 
 // ------------------------------------------------------------------ API
 
@@ -74,18 +78,45 @@ function buildTree(data) {
     }
     n.files.push(item);
   };
+  const dir = (p) => {
+    let n = root; const parts = p.split("/");
+    parts.forEach((key, i) => { n.dirs[key] ??= { name: key, path: parts.slice(0, i + 1).join("/"), dirs: {}, files: [] }; n = n.dirs[key]; });
+  };
+  (data.folders || []).forEach(dir);
   data.notes.forEach((n) => add(n.path, { ...n, kind: "note" }));
   data.attachments.forEach((a) => add(a.path, { ...a, kind: "att" }));
   return root;
 }
 
 async function loadTree() {
-  state.tree = buildTree(await get("/api/tree"));
+  const [t, pr] = await Promise.all([get("/api/tree"), get("/api/projects")]);
+  state.projects = pr; state.binCount = t.bin?.count || 0; state.binFolder = t.bin?.folder || "RecycleBin";
+  if (state.vault && !pr.some((p) => p.folder === state.vault)) setVault("");
+  state.tree = buildTree(t);
   renderTree();
 }
 
+function setVault(v) {
+  state.vault = v;
+  try { localStorage.setItem("vs-vault", v); } catch {}
+}
+
 function renderTree() {
-  const el = $("#tree"); el.innerHTML = "";
+  const nav = $("#tree");
+  nav.innerHTML = `<div class="vault-bar">
+      <select id="vault-pick" title="Vault (Stammordner) wählen – wird in diesem Browser gemerkt">
+        <option value="">all</option>${state.projects.map((p) => `<option value="${esc(p.folder)}" ${p.folder === state.vault ? "selected" : ""}>${esc(p.folder)}</option>`).join("")}
+      </select>
+      <button id="btn-new-vault" title="Neues Stammverzeichnis anlegen">+ Vault</button>
+    </div><div class="tree-body"></div>
+    <div class="node bin" data-bin="1" title="Gelöschtes – wiederherstellbar"><span class="tw"></span><span class="ic">🗑</span><span>Papierkorb${state.binCount ? ` (${state.binCount})` : ""}</span></div>`;
+  $("#vault-pick").onchange = (ev) => {
+    setVault(ev.target.value); renderTree();
+    if (!location.hash.startsWith("#/note/")) route();   // Listen neu filtern
+  };
+  $("#btn-new-vault").onclick = newVault;
+  nav.querySelector(".node.bin").onclick = () => go("#/trash");
+  const el = nav.querySelector(".tree-body");
   const walk = (node, parent) => {
     Object.values(node.dirs).sort((a, b) => a.name.localeCompare(b.name, "de")).forEach((d) => {
       const open = state.open.has(d.path);
@@ -112,7 +143,8 @@ function renderTree() {
       parent.append(row);
     });
   };
-  walk(state.tree, el);
+  const start = state.vault ? state.tree.dirs[state.vault] : state.tree;
+  if (start) walk(start, el); else el.innerHTML = `<p class="empty">Leer</p>`;
   markActive();
 }
 
@@ -180,19 +212,51 @@ function menu(ev, items) {
 const hideMenu = () => ($("#menu").style.display = "none");
 document.addEventListener("click", hideMenu);
 $("#tree").addEventListener("contextmenu", (ev) => {
-  const n = ev.target.closest(".node"); if (!n) return;
+  if (ev.target.closest(".vault-bar")) return;
+  ev.preventDefault();
+  const n = ev.target.closest(".node");
+  if (n?.dataset.bin) return menu(ev, [["Papierkorb öffnen", () => go("#/trash")]]);
+  if (!n) {  // freie Fläche im Baum: im Stamm des gewählten Vaults
+    if (!ev.target.closest(".tree-body")) return;
+    return menu(ev, [
+      ["Neue Notiz hier", () => newNote(state.vault)],
+      [state.vault ? "Neuer Unterordner …" : "Neuer Vault …", () => (state.vault ? newFolder(state.vault) : newVault())],
+    ]);
+  }
   const p = n.dataset.path, d = n.dataset.dir;
   if (d) menu(ev, [
     ["Neue Notiz hier", () => newNote(d)],
+    ["Neuer Unterordner …", () => newFolder(d)],
     ["Datei hochladen …", () => pickUpload(d)],
     ["Ordner umbenennen/verschieben …", () => askMove(d)],
+    ["Ordner löschen …", () => delPath(d, true)],
   ]);
   else menu(ev, [
     ["Öffnen", () => n.click()],
     ["Umbenennen/verschieben …", () => askMove(p)],
-    ...(p.endsWith(".md") ? [["Löschen …", () => delNote(p)]] : []),
+    ["Löschen …", () => delPath(p)],
   ]);
 });
+
+async function newFolder(parent) {
+  const r = await dialog(`Neuer Unterordner in „${parent}“`, [{ name: "name", label: "Name", required: true }], "Anlegen");
+  if (!r?.name) return;
+  try {
+    await api("POST", "/api/folder", { path: `${parent}/${r.name}` });
+    state.open.add(parent); localStorage.setItem("vs-open", JSON.stringify([...state.open]));
+    toast(`Ordner „${r.name}“ angelegt`); await loadTree();
+  } catch (e) { fail(e); }
+}
+
+async function newVault() {
+  const r = await dialog("Neuer Vault (Stammverzeichnis)", [{ name: "name", label: "Name, z. B. Garten", required: true }], "Anlegen");
+  if (!r?.name) return;
+  try {
+    await api("POST", "/api/folder", { path: r.name });
+    setVault(r.name); toast(`Vault „${r.name}“ angelegt`); await loadTree();
+    if (!location.hash.startsWith("#/note/")) route();
+  } catch (e) { fail(e); }
+}
 function pickUpload(folder) {
   const i = document.createElement("input"); i.type = "file"; i.multiple = true;
   i.onchange = async () => { for (const f of i.files) await uploadFile(folder, f); }; i.click();
@@ -305,13 +369,52 @@ $("#btn-new").onclick = (ev) => {
   menu(ev, [["Notiz …", () => newNote(folder)], ...(state.me?.areas || []).map((a) => [`${a}-Eintrag …`, () => newEntry(a)])]);
 };
 
-async function delNote(path) {
-  if (!confirm(`„${path}“ löschen? (bleibt in der Git-Historie)`)) return;
+async function delPath(path, isDir = false) {
+  if (!confirm(`${isDir ? "Ordner" : ""} „${path}“ in den Papierkorb verschieben?\n${isDir ? "Mit allem Inhalt. " : ""}Lässt sich jederzeit an die alte Stelle zurückholen.`)) return;
   try {
-    const n = await get(`/api/note?path=${encodeURIComponent(path)}&raw=1`);
-    await api("DELETE", `/api/note?path=${encodeURIComponent(path)}&base_version=${n.version}`);
-    toast("Gelöscht"); await loadTree(); if (state.note?.path === path) go("#/");
+    let q = `/api/note?path=${encodeURIComponent(path)}`;
+    if (!isDir && path.endsWith(".md")) q += `&base_version=${(await get(`/api/note?path=${encodeURIComponent(path)}&raw=1`)).version}`;
+    const r = await api("DELETE", q);
+    toast(`In den Papierkorb verschoben${r.files > 1 ? ` (${r.files} Dateien)` : ""}`);
+    await loadTree();
+    if (state.note && (state.note.path === path || state.note.path.startsWith(path + "/"))) go("#/");
   } catch (e) { fail(e); }
+}
+const delNote = (path) => delPath(path);
+
+// ------------------------------------------------------------------ Papierkorb
+
+async function showTrash() {
+  state.note = null; markActive(); document.title = "Papierkorb – VaultServer";
+  const all = await get("/api/trash"), rows = all.filter((e) => inVault(e.original));
+  const icon = { folder: "📁", note: "📄", file: "📎" };
+  $("#content").innerHTML = `<div class="results"><h2>Papierkorb${esc(vaultLabel())} (${rows.length})</h2>
+    <p class="hp">Gelöschte Ordner, Notizen und Anhänge mit ihrer Herkunft. „Wiederherstellen“ legt sie an die alte Stelle zurück; „Endgültig löschen“ entfernt sie (bleibt in der Git-Historie).</p>
+    ${rows.length ? `<p><button id="trash-empty">${state.vault ? `Alle ${rows.length} aus ${esc(state.vault)} endgültig löschen` : "Papierkorb leeren"}</button></p>` : ""}
+    ${rows.map((e) => `<div class="hit trash-row">
+      <div><span class="ic">${icon[e.kind] || "📄"}</span> <b>${esc(e.original)}</b>${e.kind === "folder" ? ` <span class="hp">(${e.files} Datei${e.files === 1 ? "" : "en"})</span>` : ""}
+        ${e.exists ? `<span class="tag warn">alte Stelle belegt</span>` : ""}</div>
+      <div class="hp">gelöscht ${fmtDate(e.deleted_at)} von ${esc(e.deleted_by)} · ${(e.size || 0) > 1048576 ? `${(e.size / 1048576).toFixed(1)} MB` : kb(e.size || 0)}</div>
+      <div class="trash-act"><button data-restore="${esc(e.id)}">Wiederherstellen</button> <button data-purge="${esc(e.id)}" data-name="${esc(e.original)}">Endgültig löschen</button></div>
+    </div>`).join("") || `<p class="empty">Der Papierkorb ist leer.</p>`}</div>`;
+  const c = $("#content");
+  c.querySelectorAll("[data-restore]").forEach((b) => (b.onclick = async () => {
+    try { const r = await api("POST", `/api/trash/${b.dataset.restore}/restore`); toast(`Wiederhergestellt: ${r.path}`); await loadTree(); showTrash(); } catch (e) { fail(e); }
+  }));
+  c.querySelectorAll("[data-purge]").forEach((b) => (b.onclick = async () => {
+    if (!confirm(`„${b.dataset.name}“ endgültig löschen? Danach nur noch über die Git-Historie zu retten.`)) return;
+    try { await api("DELETE", `/api/trash/${b.dataset.purge}`); toast("Endgültig gelöscht"); await loadTree(); showTrash(); } catch (e) { fail(e); }
+  }));
+  const empty = $("#trash-empty");
+  if (empty) empty.onclick = async () => {
+    if (!confirm(`${rows.length} Einträge endgültig löschen?`)) return;
+    try {
+      if (state.vault) for (const e of rows) await api("DELETE", `/api/trash/${e.id}`);
+      else await api("DELETE", "/api/trash");
+      toast("Papierkorb geleert"); await loadTree(); showTrash();
+    } catch (e) { fail(e); }
+  };
+  $("#side").innerHTML = "";
 }
 
 // ------------------------------------------------------------------ Navigation
@@ -338,6 +441,7 @@ async function route() {
     if (h === "/recent") return showRecent();
     if (h === "/tasks") return showTasks();
     if (h === "/setup") return showSetup();
+    if (h === "/trash") return showTrash();
     return showHome();
   } catch (e) { if (e.status !== 401) $("#content").innerHTML = `<div class="banner warn">${esc(e.message)}</div>`; }
 }
@@ -510,8 +614,8 @@ document.addEventListener("keydown", (ev) => {
 
 async function showSearch(q, archive) {
   $("#q").value = q; $("#q-archive").checked = archive; state.note = null; markActive();
-  const hits = await get(`/api/search?q=${encodeURIComponent(q)}&archive=${archive ? 1 : 0}&mode=${state.me?.semantic ? "auto" : "text"}`);
-  $("#content").innerHTML = `<div class="results"><h2>${hits.length} Treffer für „${esc(q)}“</h2>${hits.map((h) => {
+  const hits = await get(`/api/search?q=${encodeURIComponent(q)}&archive=${archive ? 1 : 0}&mode=${state.me?.semantic ? "auto" : "text"}${state.vault ? `&folder=${encodeURIComponent(state.vault)}` : ""}`);
+  $("#content").innerHTML = `<div class="results"><h2>${hits.length} Treffer für „${esc(q)}“${esc(vaultLabel())}</h2>${hits.map((h) => {
     const anchor = h.heading_path ? "#" + slug(h.heading_path.split(" > ").pop()) : "";
     const snip = esc(h.snippet).replace(/«/g, "<mark>").replace(/»/g, "</mark>");
     return `<div class="hit"><a class="t" href="#/note/${enc(h.path)}${anchor}">${esc(h.title)}</a>${h.semantic ? `<span class="tag">ähnlich</span>` : ""}
@@ -523,10 +627,10 @@ async function showSearch(q, archive) {
 async function showLint() {
   state.note = null; markActive();
   $("#content").innerHTML = `<p class="empty">Prüfe …</p>`;
-  const rows = await get("/api/lint");
+  const rows = (await get("/api/lint")).filter((r) => inVault(r.path));
   const kinds = { "kaputter-link": "Kaputte Links", regel: "Regeln", "doppelte-nummer": "Doppelte Nummern", "fehlt-in-uebersicht": "Fehlt in Übersicht", claim: "Reservierungen" };
   const by = {}; rows.forEach((r) => (by[r.kind] ??= []).push(r));
-  $("#content").innerHTML = `<div class="results"><h2>Prüfung: ${rows.length} Hinweise</h2>
+  $("#content").innerHTML = `<div class="results"><h2>Prüfung${esc(vaultLabel())}: ${rows.length} Hinweise</h2>
     <p style="display:flex;gap:8px;flex-wrap:wrap">${(state.me?.areas || []).map((a) => `<button data-ov="${esc(a)}">Übersicht ${esc(a)} erneuern</button>`).join("")}
     <button data-st="1">Statusblock erneuern</button><button data-cm="1">Commits verknüpfen</button></p>
     ${Object.entries(by).map(([k, list]) => `<h3>${esc(kinds[k] || k)} (${list.length})</h3>${list.map((r) =>
@@ -541,8 +645,8 @@ async function showLint() {
 
 async function showRecent() {
   state.note = null; markActive();
-  const rows = await get("/api/recent?limit=50");
-  $("#content").innerHTML = `<div class="results"><h2>Letzte Änderungen</h2>${rows.map((r) =>
+  const rows = (await get(`/api/recent?limit=${state.vault ? 300 : 50}`)).filter((r) => inVault(r.path)).slice(0, 50);
+  $("#content").innerHTML = `<div class="results"><h2>Letzte Änderungen${esc(vaultLabel())}</h2>${rows.map((r) =>
     `<div class="hit">${r.exists === false ? `<span class="t">${esc(r.path)}</span> <span class="tag warn">gelöscht</span>` : `<a class="t" href="#/note/${enc(r.path)}">${esc(r.path)}</a>`}
      <div class="snip">${esc(r.message || "")}</div><div class="hp">${esc(r.author || "")} · ${fmtDate(r.date || r.mtime)}</div></div>`).join("")}</div>`;
   $("#side").innerHTML = "";
@@ -550,17 +654,18 @@ async function showRecent() {
 
 async function showTasks() {
   state.note = null; markActive();
-  const rows = await get("/api/tasks");
+  const rows = await get(`/api/tasks${state.vault ? `?folder=${encodeURIComponent(state.vault)}` : ""}`);
   const by = {}; rows.forEach((r) => (by[r.path] ??= []).push(r));
-  $("#content").innerHTML = `<div class="results"><h2>Offene Aufgaben (${rows.length})</h2>${Object.entries(by).map(([p, list]) =>
+  $("#content").innerHTML = `<div class="results"><h2>Offene Aufgaben${esc(vaultLabel())} (${rows.length})</h2>${Object.entries(by).map(([p, list]) =>
     `<div class="hit"><a class="t" href="#/note/${enc(p)}">${esc(p.replace(/\.md$/, ""))}</a><ul>${list.map((t) => `<li>${esc(t.text)} <span class="hp">${esc(t.heading_path || "")}</span></li>`).join("")}</ul></div>`).join("")}</div>`;
   $("#side").innerHTML = "";
 }
 
 async function showHome() {
   state.note = null; markActive(); document.title = "VaultServer";
-  const [recent, claims] = await Promise.all([get("/api/recent?limit=12"), get("/api/claims")]);
-  $("#content").innerHTML = `<div class="results"><h2>VaultServer</h2>
+  let [recent, claims] = await Promise.all([get(`/api/recent?limit=${state.vault ? 200 : 12}`), get("/api/claims")]);
+  recent = recent.filter((r) => inVault(r.path)).slice(0, 12); claims = claims.filter((c) => inVault(c.path));
+  $("#content").innerHTML = `<div class="results"><h2>VaultServer${esc(vaultLabel())}</h2>
     ${state.me?.last_error ? `<div class="banner warn">Hintergrund: ${esc(state.me.last_error)}</div>` : ""}
     ${claims.length ? `<h3>Reserviert</h3>${claims.map((c) => `<div class="hit"><a href="#/note/${enc(c.path)}">${esc(c.path)}</a><div class="hp">${esc(c.agent)} bis ${fmtDate(c.expires_at)} ${esc(c.note)}</div></div>`).join("")}` : ""}
     <h3>Zuletzt geändert</h3>${recent.map((r) => `<div class="hit">${r.exists === false ? esc(r.path) : `<a href="#/note/${enc(r.path)}">${esc(r.path)}</a>`}<div class="hp">${esc(r.message || "")} · ${esc(r.author || "")} · ${fmtDate(r.date || r.mtime)}</div></div>`).join("")}</div>`;

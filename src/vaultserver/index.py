@@ -435,8 +435,10 @@ class Index:
     def index_file(self, rel: str) -> None:
         """Eine Datei nach einer Änderung durch den Server sofort nachziehen."""
         full = self.config.vault_path / rel
+        parts = rel.split("/")
+        hidden = any(x.startswith(".") for x in parts) or bool(set(parts[:-1]) & set(self.config.exclude))
         with self.db:
-            if not full.exists():
+            if hidden or not full.exists():  # versteckte/ausgeschlossene Dateien nie im Index
                 self._remove_note(rel)
                 self.db.execute("DELETE FROM attachments WHERE path = ?", (rel,))
             elif rel.lower().endswith(".md"):

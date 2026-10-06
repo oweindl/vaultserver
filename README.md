@@ -14,6 +14,24 @@ Die Markdown-Dateien im Git-Repo bleiben die Quelle der Wahrheit. Ein SQLite-FTS
 | `http://<host>:8100/mcp` | MCP-Server (Streamable HTTP, Bearer-Token je Rechner) |
 | `http://<host>:8100/api/…` | REST für die Web-Oberfläche |
 
+### Vaults, Ordner und Papierkorb
+
+- **Vault-Auswahl über dem Baum:** „all“ oder ein Stammordner (z. B. Moon). Die Auswahl filtert Baum, Suche, Änderungen, Aufgaben, Prüfung und Papierkorb, und der Browser merkt sie sich.
+- **„+ Vault“** legt ein neues Stammverzeichnis an.
+- **Rechtsklick auf einen Ordner:** neue Notiz, neuer Unterordner, hochladen, umbenennen oder verschieben, Ordner löschen.
+- **Rechtsklick auf eine Datei:** öffnen, umbenennen, löschen.
+- **Rechtsklick auf die freie Fläche:** neue Notiz bzw. neuer Unterordner im gewählten Vault.
+- Leere Ordner bleiben über eine `.gitkeep` in Git erhalten.
+
+**Löschen** (Web und MCP-Werkzeug `delete`) schiebt Notizen, Anhänge und ganze Ordner in den Papierkorb `RecycleBin` im Vault-Stamm:
+
+- Jeder Eintrag liegt als `RecycleBin/<Zeitstempel>-<id>/<alter Pfad>` mit Herkunft in `.recycle.json`.
+- Der Papierkorb ist nicht im Suchindex, Links auf Gelöschtes gelten also als kaputt.
+- Seite **Papierkorb** (unten im Baum): wiederherstellen an die alte Stelle (Ordner werden zusammengeführt, bei belegten Dateien passiert nichts), endgültig löschen, leeren.
+- Geleert wird nur von Hand. Endgültig Gelöschtes bleibt in der Git-Historie.
+- MCP: `recycle_bin`, `restore`, `create_folder`.
+- Der Ordner `RecycleBin` wird beim Start und nach jedem Pull angelegt, falls er fehlt.
+
 ## Einrichtung für Claude
 
 Alles Nötige steht in der Web-Oberfläche unter **Konto › Einrichtung (Claude/MCP)** (`/#/setup`):

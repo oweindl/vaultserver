@@ -208,3 +208,11 @@ dialog .btns { display: flex; justify-content: flex-end; gap: 8px; margin-top: 1
   .setup table.list:not(.tools) td:nth-child(3) { display: block; }
   .setup table.list select { max-width: 100%; }
 }
+
+/* Vault-Auswahl über dem Baum, Papierkorb */
+.vault-bar { display: flex; gap: 6px; padding: 2px 4px 8px; position: sticky; top: -8px; background: var(--panel); z-index: 2; }
+.vault-bar select { flex: 1; min-width: 0; padding: 4px 6px; font-size: 14px; }
+.vault-bar button { flex: none; font-size: 13px; padding: 4px 8px; }
+.tree-body { min-height: 40px; }
+.node.bin { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 6px; color: var(--muted); }
+.trash-row .trash-act { margin-top: 6px; }

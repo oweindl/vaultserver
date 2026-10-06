@@ -40,6 +40,8 @@ GENERAL_RULES = """\
    `release`. Reservierungen anderer Rechner respektieren.
 7. **Nachtläufe** beginnen mit `changes_since` (letzter bekannter Commit oder Zeitpunkt) statt alles zu lesen.
 8. **Archiv** ist in Suche und Abfragen ausgeblendet; nur bei Bedarf `include_archive=true`.
+   **Löschen** (`delete`) schiebt Notizen, Anhänge und Ordner in den Papierkorb `RecycleBin`; `recycle_bin` zeigt ihn,
+   `restore` holt einen Eintrag an die alte Stelle zurück. Neue leere Ordner mit `create_folder`.
 9. Jede Änderung wird ein Git-Commit mit deinem Rechnernamen; `message` kurz und mit Nummer (z. B.
    `FIX-054 Status erledigt (Test)`).
 """
@@ -59,6 +61,10 @@ class Service:
         self.last_error: str = ""
         with self.lock:
             self.index.sync()
+        try:
+            self.store.ensure_bin()
+        except Exception as e:  # noqa: BLE001 – Start nicht blockieren
+            log.warning("Papierkorb anlegen: %s", e)
 
     # ------------------------------------------------------------ Projekte
 
@@ -171,6 +177,7 @@ class Service:
                     r = self.store.pull()
                     if r.get("pulled"):
                         log.info("git pull: %s", r)
+                        self.store.ensure_bin()  # falls jemand den Papierkorb woanders gelöscht hat
                 if c.git_push and self.store.dirty_push and now - last["push"] >= 10:
                     last["push"] = now
                     self.store.push()

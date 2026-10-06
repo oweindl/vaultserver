@@ -9,6 +9,7 @@ import hmac
 import json
 import logging
 import mimetypes
+import os
 import secrets
 import time
 from pathlib import Path, PurePosixPath
@@ -326,7 +327,15 @@ def create_app(config: Config, start_background: bool = True) -> FastAPI:
         with svc.lock:
             notes = [dict(r) for r in svc.index.db.execute("SELECT path, title, size, mtime FROM notes ORDER BY path")]
             atts = [dict(r) for r in svc.index.db.execute("SELECT path, type, size, mtime FROM attachments ORDER BY path")]
-        return {"notes": notes, "attachments": atts}
+        vault, skip = config.vault_path, set(config.exclude)
+        folders = []
+        for dirpath, dirs, _files in os.walk(vault):
+            dirs[:] = sorted(d for d in dirs if d not in skip and not d.startswith("."))
+            rel = Path(dirpath).relative_to(vault).as_posix()
+            if rel != ".":
+                folders.append(rel)
+        return {"notes": notes, "attachments": atts, "folders": folders,
+                "bin": {"folder": config.recycle_folder, "count": len(svc.store.bin_list())}}
 
     @app.get("/api/note")
     def note(path: str, raw: bool = False):
@@ -471,11 +480,48 @@ def create_app(config: Config, start_background: bool = True) -> FastAPI:
             return err(e)
 
     @app.delete("/api/note")
-    def delete(request: Request, path: str, base_version: str):
+    def delete(request: Request, path: str, base_version: str | None = None):
+        """Notiz, Anhang oder Ordner in den Papierkorb."""
         try:
-            return svc.store.delete(path, agent(request), base_version=base_version)
+            return svc.store.trash(path, agent(request), base_version=base_version)
         except Exception as e:
             return err(e)
+
+    @app.post("/api/folder")
+    def folder_create(request: Request, data: dict = Body(...)):
+        try:
+            return svc.store.mkdir(data.get("path", ""), agent(request))
+        except Exception as e:
+            return err(e)
+
+    @app.get("/api/trash")
+    def trash_list():
+        return svc.store.bin_list()
+
+    @app.post("/api/trash/{entry_id}/restore")
+    def trash_restore(request: Request, entry_id: str):
+        try:
+            return svc.store.restore(entry_id, agent(request))
+        except Exception as e:
+            return err(e)
+
+    @app.delete("/api/trash/{entry_id}")
+    def trash_purge(request: Request, entry_id: str):
+        try:
+            return svc.store.purge(entry_id, agent(request))
+        except Exception as e:
+            return err(e)
+
+    @app.delete("/api/trash")
+    def trash_empty(request: Request):
+        try:
+            return svc.store.purge(None, agent(request))
+        except Exception as e:
+            return err(e)
+
+    @app.get("/api/projects")
+    def projects():
+        return [{"name": p.name, "folder": p.folder, "start": p.start or None} for p in svc.projects().values()]
 
     @app.post("/api/create")
     def create(request: Request, data: dict = Body(...)):

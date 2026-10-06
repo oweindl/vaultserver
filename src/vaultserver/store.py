@@ -8,7 +8,10 @@ wird zwischen Threads geteilt).
 from __future__ import annotations
 
 import hashlib
+import json
 import os
+import secrets
+import shutil
 import re
 import threading
 import time
@@ -537,6 +540,177 @@ class Store:
             self.index.sync()
             commit = self._finish([path], message or f"Anhang: {path}", agent)
             return {"path": path, "size": len(data), "commit": commit}
+
+    # ------------------------------------------------------------ Ordner und Papierkorb
+
+    KEEP = ".gitkeep"          # hält leere Ordner in Git
+    META = ".recycle.json"     # Herkunft eines Papierkorb-Eintrags
+
+    @property
+    def bin(self) -> str:
+        return self.config.recycle_folder
+
+    def _in_bin(self, path: str) -> bool:
+        return bool(self.bin) and (path == self.bin or path.startswith(self.bin + "/"))
+
+    def _files_under(self, rel: str) -> list[str]:
+        """Alle Dateien (auch .gitkeep) unter einem Ordner, relativ zum Vault."""
+        base = self.config.vault_path / rel
+        out = []
+        for dirpath, _dirs, files in os.walk(base):
+            for f in files:
+                out.append(str(PurePosixPath(Path(dirpath, f).relative_to(self.config.vault_path).as_posix())))
+        return sorted(out)
+
+    def ensure_bin(self) -> str | None:
+        """Den Papierkorb-Ordner anlegen, falls er fehlt (er muss immer da sein)."""
+        if not self.bin:
+            return None
+        with self.lock:
+            keep = self.config.vault_path / self.bin / self.KEEP
+            if keep.exists():
+                return None
+            keep.parent.mkdir(parents=True, exist_ok=True)
+            keep.write_text("", encoding="utf-8")
+            return self._finish_raw([f"{self.bin}/{self.KEEP}"], f"Papierkorb {self.bin} angelegt", "vaultserver")
+
+    def mkdir(self, path: str, agent: str, message: str | None = None) -> dict:
+        """Neuen (leeren) Ordner anlegen; ohne Schrägstrich = neues Stammverzeichnis („neuer Vault“)."""
+        path = path.strip().strip("/")
+        if self._in_bin(path):
+            raise Rejected(f"Im Papierkorb {self.bin} lassen sich keine Ordner anlegen")
+        with self.lock:
+            full = self._abs(path)
+            if full.exists():
+                raise Rejected(f"Gibt es schon: {path}")
+            full.mkdir(parents=True)
+            (full / self.KEEP).write_text("", encoding="utf-8")
+            commit = self._finish_raw([f"{path}/{self.KEEP}"], message or f"Ordner angelegt: {path}", agent)
+            return {"path": path, "created": True, "commit": commit}
+
+    def trash(self, path: str, agent: str, base_version: str | None = None, message: str | None = None,
+              force: bool = False) -> dict:
+        """Notiz, Anhang oder Ordner in den Papierkorb schieben (mit Herkunft, wiederherstellbar)."""
+        path = path.strip().strip("/")
+        if not path:
+            raise Rejected("Der ganze Vault lässt sich nicht löschen")
+        if self._in_bin(path):
+            raise Rejected(f"Liegt schon im Papierkorb – dort „endgültig löschen“ verwenden")
+        with self.lock:
+            full = self._abs(path)
+            if not full.exists() and not full.is_dir():
+                full = self._abs(self._norm_path(path))
+                path = self._norm_path(path)
+            if not full.exists():
+                raise KeyError(f"Nicht gefunden: {path}")
+            kind = "folder" if full.is_dir() else "note" if path.endswith(".md") else "file"
+            if kind == "note":
+                text, cur_v = self.current(path)
+                if base_version is not None:
+                    self._check_version(path, base_version, text, cur_v)
+                self._check_claim(path, agent, force)
+                files = [path]
+            elif kind == "folder":
+                files = self._files_under(path)
+                for f in files:
+                    if f.endswith(".md"):
+                        self._check_claim(f, agent, force)
+            else:
+                files = [path]
+            entry = f"{self.bin}/{time.strftime('%Y%m%dT%H%M%S')}-{secrets.token_hex(2)}"
+            dest = self.config.vault_path / entry / path
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(full), str(dest))
+            meta = {"original": path, "kind": kind, "deleted_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                    "deleted_by": agent, "files": len(files),
+                    "size": sum((self.config.vault_path / entry / f).stat().st_size for f in files
+                                if (self.config.vault_path / entry / f).is_file())}
+            (self.config.vault_path / entry / self.META).write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+            for f in files:
+                self.index.index_file(f)  # aus dem Index nehmen
+                self.index.db.execute("DELETE FROM claims WHERE path = ?", (f,))
+            moved = [f"{entry}/{f}" for f in files] + [f"{entry}/{self.META}"]
+            commit = self._finish_raw(files + moved, message or f"In den Papierkorb: {path}", agent)
+            return {"path": path, "kind": kind, "trashed": True, "id": entry.split("/", 1)[1],
+                    "files": len(files), "commit": commit}
+
+    def _finish_raw(self, paths: list[str], message: str, agent: str) -> str | None:
+        """Wie _finish, aber ohne Index (Papierkorb ist nicht im Index)."""
+        commit = None
+        if self.config.git_commit:
+            commit = self.git.commit(paths, f"{self._agent_label(agent)}: {message}", self._agent_label(agent))
+            if commit:
+                self.dirty_push = True
+        return commit
+
+    def _entry(self, entry_id: str) -> tuple[Path, dict]:
+        if not re.fullmatch(r"[0-9T]{15}-[0-9a-f]{4}", entry_id or ""):
+            raise KeyError(f"Papierkorb-Eintrag nicht gefunden: {entry_id}")
+        d = self.config.vault_path / self.bin / entry_id
+        try:
+            return d, json.loads((d / self.META).read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            raise KeyError(f"Papierkorb-Eintrag nicht gefunden: {entry_id}") from None
+
+    def bin_list(self) -> list[dict]:
+        base = self.config.vault_path / self.bin
+        out = []
+        with self.lock:
+            for d in sorted(base.iterdir(), reverse=True) if base.is_dir() else []:
+                if not d.is_dir():
+                    continue
+                try:
+                    meta = json.loads((d / self.META).read_text(encoding="utf-8"))
+                except (FileNotFoundError, ValueError):
+                    continue
+                target = self.config.vault_path / meta["original"]
+                out.append({"id": d.name, **meta, "exists": target.exists()})
+        return out
+
+    def restore(self, entry_id: str, agent: str, message: str | None = None) -> dict:
+        """Eintrag an die alte Stelle zurück. Ordner werden mit einem vorhandenen Ordner zusammengeführt;
+        gibt es eine Datei dort schon, wird nichts verschoben und die Konflikte werden genannt."""
+        with self.lock:
+            d, meta = self._entry(entry_id)
+            orig = meta["original"]
+            src_root = d / orig
+            if not src_root.exists():
+                raise KeyError(f"Inhalt von {entry_id} fehlt im Papierkorb")
+            rel_files = ([orig] if src_root.is_file()
+                         else [f[len(f"{self.bin}/{entry_id}/"):] for f in self._files_under(f"{self.bin}/{entry_id}/{orig}")])
+            clash = [f for f in rel_files if (self.config.vault_path / f).exists() and not f.endswith("/" + self.KEEP)]
+            if clash:
+                raise Rejected(f"Gibt es an der alten Stelle schon: {', '.join(clash[:5])}"
+                               + (f" (+{len(clash) - 5})" if len(clash) > 5 else ""))
+            for f in rel_files:
+                dst = self.config.vault_path / f
+                if dst.exists():   # nur .gitkeep
+                    (self.config.vault_path / self.bin / entry_id / f).unlink()
+                    continue
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(self.config.vault_path / self.bin / entry_id / f), str(dst))
+            shutil.rmtree(d)
+            for f in rel_files:
+                self.index.index_file(f)
+            gone = [f"{self.bin}/{entry_id}/{f}" for f in rel_files] + [f"{self.bin}/{entry_id}/{self.META}"]
+            commit = self._finish_raw(rel_files + gone, message or f"Wiederhergestellt: {orig}", agent)
+            return {"id": entry_id, "path": orig, "kind": meta["kind"], "restored": True, "files": len(rel_files),
+                    "commit": commit}
+
+    def purge(self, entry_id: str | None, agent: str) -> dict:
+        """Papierkorb-Eintrag endgültig löschen (bleibt in der Git-Historie); ohne id: Papierkorb leeren."""
+        with self.lock:
+            ids = [entry_id] if entry_id else [e["id"] for e in self.bin_list()]
+            paths = []
+            for i in ids:
+                d, meta = self._entry(i)
+                paths += self._files_under(f"{self.bin}/{i}")
+                shutil.rmtree(d)
+            if not ids:
+                return {"purged": 0, "commit": None}
+            label = f"Endgültig gelöscht: {meta['original']}" if entry_id else f"Papierkorb geleert ({len(ids)} Einträge)"
+            commit = self._finish_raw(paths, label, agent)
+            return {"purged": len(ids), "commit": commit}
 
     # ------------------------------------------------------------ Vorlagen (Idee 2)
 

@@ -46,6 +46,8 @@ class Config:
     status_note: str = ""               # Idee 5: Notiz mit automatischem Statusblock
     # Projekt-Kontexte: Name -> Ordner oder {folder, start}; leer = Ordner der obersten Ebene
     projects: dict = field(default_factory=dict)
+    # Papierkorb im Vault-Stamm: Gelöschtes landet hier (wiederherstellbar), nicht im Suchindex
+    recycle_folder: str = "RecycleBin"
 
     host: str = "0.0.0.0"
     port: int = 8100
@@ -100,6 +102,7 @@ class Config:
             areas=areas,
             status_note=data.get("status_note", ""),
             projects=data.get("projects", {}),
+            recycle_folder=data.get("recycle_folder", "RecycleBin"),
             host=server.get("host", "0.0.0.0"),
             port=server.get("port", 8100),
             tokens={v: k for k, v in server.get("tokens", {}).items()},
@@ -119,6 +122,10 @@ class Config:
             ollama_url=sem.get("ollama_url", "http://localhost:11434"),
             ollama_model=sem.get("model", "nomic-embed-text"),
         )
+
+    def __post_init__(self):
+        if self.recycle_folder and self.recycle_folder not in self.exclude:
+            self.exclude = [*self.exclude, self.recycle_folder]
 
     def normalize_value(self, key_norm: str, value: str) -> str:
         v = " ".join(value.strip().lower().split())
