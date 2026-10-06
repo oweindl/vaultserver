@@ -139,7 +139,7 @@ function renderTree() {
       row.dataset.path = f.path; row.draggable = true;
       row.title = f.kind === "note" ? `${f.title}\n${kb(f.size)} · ${fmtDate(f.mtime)}${f.big ? `\nGrößer als ${f.big} KB – Rechtsklick › Optimieren` : ""}` : `${f.type} · ${kb(f.size)}`;
       row.innerHTML = `<span class="tw"></span><span class="ic">${f.kind === "note" ? "📄" : "📎"}</span><span>${esc(f.kind === "note" ? name.replace(/\.md$/, "") : name)}</span>${f.big ? `<span class="big" title="Größer als ${f.big} KB – aufteilen">⚠</span>` : ""}`;
-      row.onclick = () => f.kind === "note" ? go(`#/note/${enc(f.path)}`) : openViewer(f.path);
+      row.onclick = () => go(`#/${f.kind === "note" ? "note" : "file"}/${enc(f.path)}`);
       parent.append(row);
     });
   };
@@ -150,8 +150,9 @@ function renderTree() {
 
 function markActive() {
   document.querySelectorAll("#tree .node.active").forEach((n) => n.classList.remove("active"));
-  if (!state.note) return;
-  const row = [...document.querySelectorAll("#tree .node.note")].find((n) => n.dataset.path === state.note.path);
+  const p = state.note?.path || state.file;
+  if (!p) return;
+  const row = [...document.querySelectorAll("#tree .node.note, #tree .node.att")].find((n) => n.dataset.path === p);
   if (row) row.classList.add("active");
 }
 
@@ -320,15 +321,57 @@ function closeViewer() { const v = $("#viewer"); if (v.open) v.close(); $("#v-bo
 $("#v-close").onclick = closeViewer;
 $("#viewer").addEventListener("close", () => ($("#v-body").innerHTML = ""));  // Video/Audio anhalten
 $("#viewer").addEventListener("click", (ev) => { if (ev.target.id === "viewer") closeViewer(); }); // Klick auf den Hintergrund
-// Links und eingebettete Bilder in Notizen: Anhänge im Popup statt neuem Tab
+// In Notizen: eingebettete Bilder öffnen per Klick im neuen Tab, Links auf Anhänge im Inhaltsbereich
 $("#content").addEventListener("click", (ev) => {
   if (ev.ctrlKey || ev.metaKey || ev.shiftKey || ev.button !== 0) return;  // Strg/⌘-Klick: wie gewohnt neuer Tab
   const el = ev.target.closest("a[href^='/api/file/'], img[data-file]");
   if (!el || !el.closest(".md")) return;
   ev.preventDefault();
   const path = el.dataset.file || decodeURIComponent(el.getAttribute("href").slice("/api/file/".length));
-  openViewer(path);
+  if (el.tagName === "IMG") window.open(`/api/file/${enc(path)}`, "_blank", "noopener");
+  else go(`#/file/${enc(path)}`);
 });
+
+// Anhang im Inhaltsbereich anzeigen (statt Popup): Bilder, PDFs, Video, Audio, Text; Bild-Klick = neuer Tab
+function fileInfo(path) {
+  let n = state.tree; const parts = path.split("/");
+  for (let i = 0; i < parts.length - 1 && n; i++) n = n.dirs[parts[i]];
+  return n?.files.find((f) => f.path === path) || null;
+}
+async function showFile(path) {
+  state.note = null; state.file = path; revealInTree(path); markActive();
+  const url = `/api/file/${enc(path)}`, name = path.split("/").pop(), info = fileInfo(path), k = kindOf(path);
+  document.title = `${name} – VaultServer`;
+  $("#content").innerHTML = `
+    <div class="note-head">
+      <div class="path">${esc(path)}${info ? ` · ${esc(info.type || "")} · ${kb(info.size)} · ${fmtDate(info.mtime)}` : ""}</div>
+      <div class="actions">
+        <a class="btn" href="${url}" target="_blank" rel="noopener">In neuem Tab öffnen</a>
+        <a class="btn" href="${url}" download>Herunterladen</a>
+        <button id="f-more" title="Mehr">⋯</button>
+      </div>
+    </div>
+    <div class="att-view att-${k}"></div>`;
+  const box = $("#content .att-view");
+  if (k === "image") {
+    const img = document.createElement("img"); img.src = url; img.alt = name; img.title = "Klicken: in neuem Tab öffnen";
+    img.onclick = () => window.open(url, "_blank", "noopener");
+    box.append(img);
+  } else if (k === "pdf") box.innerHTML = `<iframe src="${url}" title="${esc(name)}"></iframe>`;
+  else if (k === "html") box.innerHTML = `<iframe src="${url}" sandbox="allow-scripts" title="${esc(name)}"></iframe>`;
+  else if (k === "video") box.innerHTML = `<video src="${url}" controls></video>`;
+  else if (k === "audio") box.innerHTML = `<audio src="${url}" controls></audio>`;
+  else if (k === "text") {
+    try { const pre = document.createElement("pre"); pre.textContent = await (await fetch(url)).text(); box.append(pre); }
+    catch (e) { box.innerHTML = `<p class="empty">${esc(e.message)}</p>`; }
+  } else box.innerHTML = `<p class="empty">Keine Vorschau für .${esc(EXT(path))}-Dateien – „Herunterladen“ oder „In neuem Tab öffnen“.</p>`;
+  $("#f-more").onclick = (ev) => { ev.stopPropagation(); menu(ev, [
+    ["Umbenennen/verschieben …", () => askMove(path)],
+    ["Löschen …", () => delPath(path)],
+  ]); };
+  $("#side").innerHTML = "";
+  $("#center").scrollTop = 0;
+}
 
 // ------------------------------------------------------------------ Dialoge
 
@@ -535,7 +578,7 @@ window.addEventListener("beforeunload", (e) => { if (state.dirty) { e.preventDef
 
 async function route() {
   if (state.dirty && !confirm("Ungespeicherte Änderungen verwerfen?")) return;
-  state.dirty = false; state.editor = null;
+  state.dirty = false; state.editor = null; state.file = null;
   document.body.classList.remove("tree-open");
   const h = decodeURI(location.hash.slice(1) || "/");
   try {
@@ -552,6 +595,7 @@ async function route() {
     if (h === "/tasks") return showTasks();
     if (h === "/setup") return showSetup();
     if (h === "/trash") return showTrash();
+    if (h.startsWith("/file/")) return showFile(location.hash.slice("#/file/".length).split("/").map(decodeURIComponent).join("/"));
     return showHome();
   } catch (e) { if (e.status !== 401) $("#content").innerHTML = `<div class="banner warn">${esc(e.message)}</div>`; }
 }
@@ -1014,6 +1058,10 @@ function onLive(ev) {
   if (ev.reset) { later("tree", 200, loadTree); refreshView(); return; }
   const paths = ev.paths || [], removed = ev.removed || [];
   if (ev.tree || removed.length || paths.some((p) => !treeHas(p))) later("tree", 400, () => loadTree().catch(() => {}));
+  if (state.file && (paths.includes(state.file) || removed.includes(state.file))) {
+    if (removed.includes(state.file)) noteGone(ev); else showFile(state.file);
+    return;
+  }
   const cur = state.note?.path;
   if (cur && removed.includes(cur)) noteGone(ev);
   else if (cur && paths.includes(cur)) noteChanged(ev);
@@ -1021,7 +1069,7 @@ function onLive(ev) {
 }
 function refreshView() {
   const h = location.hash;
-  if (h.startsWith("#/note/") || h.startsWith("#/setup")) return;   // Einrichtung: Eingaben nicht zurücksetzen
+  if (h.startsWith("#/note/") || h.startsWith("#/file/") || h.startsWith("#/setup")) return;   // Einrichtung: Eingaben nicht zurücksetzen
   if ($("dialog[open]")) return;
   route();
 }
