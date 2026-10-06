@@ -14,6 +14,7 @@ from .semantic import Semantic
 from .store import Store, find_section
 from .clients import Clients
 from .live import Feed
+from .drops import Drops
 from .scope import Project, load_projects
 
 log = logging.getLogger("vaultserver")
@@ -60,6 +61,7 @@ class Service:
         self.store = Store(config, self.index)
         self.clients = Clients(config)
         self.feed = Feed(config.vault_path, config.recycle_folder)
+        self.drops = Drops()
         self.store.on_change = self.feed.publish
         self.lock = self.store.lock
         self.semantic = (Semantic(self.index, config.ollama_url, config.ollama_model)

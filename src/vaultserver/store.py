@@ -305,9 +305,16 @@ class Store:
 
     # ------------------------------------------------------------ Schreibwerkzeuge
 
+    TEXT_SUFFIXES = {".md", ".txt", ".json", ".csv", ".tsv", ".yaml", ".yml", ".svg", ".html", ".htm", ".css",
+                     ".js", ".base", ".canvas", ".xml", ".ini", ".toml"}
+
     def write(self, path: str, content: str, agent: str, base_version: str | None = None,
               message: str | None = None, force: bool = False) -> dict:
         path = self._norm_path(path)
+        suffix = PurePosixPath(path).suffix.lower()
+        if suffix and suffix not in self.TEXT_SUFFIXES:
+            raise Rejected(f"write ist nur für Text (Notizen .md u. ä.); {PurePosixPath(path).name} ist eine Binärdatei – "
+                           "Bilder/Dateien mit upload_link (Datei direkt senden), upload_url (aus dem Internet) oder upload (kleine Dateien als Base64)")
         with self.lock:
             old, cur_v = self.current(path)
             self._check_version(path, base_version, old, cur_v)

@@ -66,3 +66,43 @@ def test_mcp_upload_and_read_file(env):
     assert base64.b64decode(pdf["data_base64"]) == b"%PDF-1.4 test" and pdf["type"] == "application/pdf"
     assert call(c, "read_file", {"path": "Moon/A.md"})["isError"]
     assert call(c, "read_file", {"path": "../Finance/x.png"}, url="/mcp/moon")["isError"]
+
+
+def test_write_rejects_binary(env):
+    c, v = env
+    r = call(c, "write", {"path": "Moon/Bilder/_test.png", "content": "iVBORw0KGgo="})
+    msg = (r.get("structuredContent") or {}).get("message", "") or r["content"][0]["text"]
+    assert "Binärdatei" in msg and "upload_link" in msg and not (v / "Moon" / "Bilder" / "_test.png").exists()
+    assert c.put("/api/note", json={"path": "Moon/x.jpg", "text": "abc"}).status_code == 422
+    assert c.put("/api/note", json={"path": "Moon/daten.json", "text": "{}"}).status_code == 200      # Text geht
+
+
+def test_upload_link(env):
+    c, v = env
+    link = call(c, "upload_link", {"path": "Bilder/foto.png"}, url="/mcp/moon")["structuredContent"]
+    assert link["path"] == "Bilder/foto.png" and "/api/drop/" in link["url"] and "curl" in link["curl"]
+    t = TestClient(c.app)   # ohne Anmeldung, ohne Token
+    did = link["url"].split("/api/drop/")[1]
+    r = t.put(f"/api/drop/{did}", content=PNG)
+    assert r.status_code == 200 and r.json()["path"] == "Moon/Bilder/foto.png" and r.json()["embed"] == "![[Moon/Bilder/foto.png]]"
+    assert (v / "Moon" / "Bilder" / "foto.png").read_bytes() == PNG
+    assert t.put(f"/api/drop/{did}", content=PNG).status_code == 404                               # nur einmal
+    assert t.put("/api/drop/erfunden", content=PNG).status_code == 404
+    # multipart und Umbenennen bei gleichem Namen
+    did2 = call(c, "upload_link", {"path": "Moon/Bilder/foto.png"})["structuredContent"]["url"].split("/api/drop/")[1]
+    assert t.post(f"/api/drop/{did2}", files={"file": ("x.png", PNG)}).json()["path"] == "Moon/Bilder/foto (2).png"
+    # zu groß: abgelehnt, nichts gespeichert
+    did3 = call(c, "upload_link", {"path": "Moon/gross.bin"})["structuredContent"]["url"].split("/api/drop/")[1]
+    assert t.put(f"/api/drop/{did3}", content=b"x" * (1024 * 1024 + 50)).status_code == 422 and not (v / "Moon" / "gross.bin").exists()
+    assert call(c, "upload_link", {"path": "../Finance/x.png"}, url="/mcp/moon")["isError"]
+
+
+def test_upload_url(env, monkeypatch):
+    c, v = env
+    r = call(c, "upload_url", {"path": "Moon/x.png", "url": "http://127.0.0.1:8100/"})
+    assert "interne Adresse" in r["content"][0]["text"]
+    assert "http- oder https" in call(c, "upload_url", {"path": "Moon/x.png", "url": "file:///etc/passwd"})["content"][0]["text"]
+    import vaultserver.drops as drops
+    monkeypatch.setattr(drops, "fetch", lambda url, max_bytes: (PNG, "image/png"))
+    ok = call(c, "upload_url", {"path": "Bilder/web.png", "url": "https://example.com/a.png"}, url="/mcp/moon")["structuredContent"]
+    assert ok["path"] == "Bilder/web.png" and (v / "Moon" / "Bilder" / "web.png").read_bytes() == PNG

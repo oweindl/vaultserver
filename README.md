@@ -24,7 +24,11 @@ Hochladen geht für jeden Dateityp: Bilder, PDFs und andere Binärdateien, bis `
 - **Gleicher Name:** Eine vorhandene Datei wird nie still überschrieben. Die neue bekommt einen freien Namen (`bild (2).png`), und das Ergebnis nennt den tatsächlichen Pfad. Bewusst ersetzen geht mit `overwrite=true`.
 - **MCP:**
   - `upload(path, data_base64)` lädt hoch. Das Ergebnis enthält `embed` mit dem fertigen `![[voller Pfad]]`.
+  - **`upload_link(path)`** ist der Weg für Fotos und größere Dateien. Der Server gibt eine Einmal-Adresse zurück (15 Minuten gültig, kein Token nötig). Der Client schickt die Datei direkt, z. B. `curl -T foto.jpg <url>`, sodass nichts als Base64 durch das Modell läuft.
+  - **`upload_url(path, url)`** lässt den Server eine Datei aus dem Internet holen. Nur öffentliche Adressen sind erlaubt, mit Größengrenze.
   - `read_file(path)` gibt Bilder (png/jpg/gif/webp bis 5 MB) als Bild zurück, das Claude ansehen kann. Andere Dateien bis 2 MB kommen als Base64.
+  - `write` ist nur für Text. Bilder und andere Binärdateien lehnt es ab, mit Verweis auf die Upload-Werkzeuge.
+- **Nach einem Update von VaultServer** mit neuen Werkzeugen müssen MCP-Clients **neu verbinden**: in Claude Code `/mcp` › neu verbinden oder eine neue Sitzung, Claude Desktop ganz neu starten. Die Werkzeugliste wird nur beim Verbinden geladen.
 
 ### Größenregeln: Notizen klein halten
 

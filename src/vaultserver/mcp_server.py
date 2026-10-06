@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import binascii
 import contextvars
+from pathlib import PurePosixPath
 import mimetypes
 from typing import Any, Literal
 
@@ -336,9 +337,10 @@ def build_mcp(svc: Service) -> MCPServer:
     @mcp.tool(annotations=RW)
     def upload(path: str, data_base64: str, overwrite: bool = False, message: str | None = None,
                ctx: Context | None = None) -> dict[str, Any]:
-        """Datei hochladen – auch Bilder und andere Binärdateien (Inhalt als Base64). Gibt es den Namen schon,
-        wird ohne overwrite ein freier Name gewählt („bild (2).png“); das Ergebnis nennt den tatsächlichen Pfad.
-        In Notizen einbinden mit ![[Pfad]]. Bilder neben der Notiz im Unterordner „Bilder“ ablegen."""
+        """Kleine Datei hochladen, Inhalt als Base64 (z. B. ein selbst erzeugtes Diagramm, wenige KB).
+        Für Fotos und größere Dateien NICHT verwenden – dafür upload_link (Datei direkt senden, z. B. mit curl)
+        oder upload_url (aus dem Internet). Gibt es den Namen schon, wird ohne overwrite ein freier Name gewählt
+        („bild (2).png“). Ergebnis: tatsächlicher Pfad und embed (![[…]]). Bilder in „Bilder/“ neben der Notiz."""
         sc = scope_of(ctx)
 
         def run():
@@ -349,6 +351,45 @@ def build_mcp(svc: Service) -> MCPServer:
             res = st.upload(sc.full(path), data, agent_from(ctx, svc), message=message, overwrite=overwrite)
             out = sc.rel(res)
             out["embed"] = f"![[{res['path']}]]"   # Link im Notiztext: voller Vault-Pfad, überall eindeutig
+            return out
+        return _guard(run)()
+
+    @mcp.tool(annotations=RW)
+    def upload_link(path: str, overwrite: bool = False, ctx: Context | None = None) -> dict[str, Any]:
+        """Einmal-Adresse zum Hochladen einer Datei (Foto, PDF, beliebig groß bis zur Grenze) ohne Base64:
+        Die Datei geht direkt an den Server, nicht durch das Modell. 15 Minuten gültig, einmal nutzbar, kein
+        Token nötig. Senden z. B. mit `curl -T "foto.jpg" "<url>"` (PUT) oder `curl -F "file=@foto.jpg" "<url>"`.
+        Die Antwort des Servers nennt den tatsächlichen Pfad und embed (![[…]]). Bilder in „Bilder/“ neben der Notiz."""
+        sc = scope_of(ctx)
+
+        def run():
+            full = sc.full(path)
+            if not PurePosixPath(full).name or st._in_bin(full):
+                raise ValueError("Ungültiger Zielpfad")
+            st._abs(full)   # Pfad prüfen (keine .., keine versteckten Teile)
+            did, exp = svc.drops.create(full, agent_from(ctx, svc), overwrite)
+            host = ((ctx.headers if ctx else None) or {}).get("host") or f"{svc.config.host}:{svc.config.port}"
+            url = f"http://{host}/api/drop/{did}"
+            return {"url": url, "path": sc.rel(full), "expires_in_s": int(exp - __import__("time").time()),
+                    "max_mb": svc.config.max_upload_mb,
+                    "curl": f'curl -sS -T "<datei>" "{url}"',
+                    "hinweis": "Einmal nutzbar. Antwort enthält path und embed; bei vergebenem Namen wird umbenannt."}
+        return _guard(run)()
+
+    @mcp.tool(annotations=RW)
+    def upload_url(path: str, url: str, overwrite: bool = False, message: str | None = None,
+                   ctx: Context | None = None) -> dict[str, Any]:
+        """Datei aus dem Internet in den Vault laden: der Server holt `url` (http/https, nur öffentliche Adressen,
+        Größengrenze) und speichert sie unter path. Ergebnis: tatsächlicher Pfad und embed (![[…]])."""
+        sc = scope_of(ctx)
+
+        def run():
+            from .drops import fetch
+            data, _ctype = fetch(url, svc.config.max_upload_mb * 1024 * 1024)
+            res = st.upload(sc.full(path), data, agent_from(ctx, svc), message=message or f"Anhang aus {url[:80]}",
+                            overwrite=overwrite)
+            out = sc.rel(res)
+            out["embed"] = f"![[{res['path']}]]"
             return out
         return _guard(run)()
 

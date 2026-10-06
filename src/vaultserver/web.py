@@ -164,6 +164,8 @@ def create_app(config: Config, start_background: bool = True) -> FastAPI:
                     hdrs.append((SCOPE_HEADER.encode(), scope_name.encode()))
                 request.scope["headers"] = hdrs
                 return await call_next(request)
+            if path.startswith("/api/drop/"):
+                return await call_next(request)   # Einmal-Adresse ist selbst das Geheimnis
             if path.startswith("/api/") and path not in ("/api/login", "/api/logout"):
                 user = read_session(request.cookies.get(COOKIE, ""), key, users)
                 if not user and not machine:
@@ -597,6 +599,34 @@ def create_app(config: Config, start_background: bool = True) -> FastAPI:
         target = f"{folder.strip('/')}/{fname}" if folder.strip("/") else fname
         try:
             return svc.store.upload(target, data, agent(request), overwrite=overwrite)
+        except Exception as e:
+            return err(e)
+
+    @app.api_route("/api/drop/{did}", methods=["PUT", "POST"])
+    async def drop(request: Request, did: str):
+        """Einmal-Upload aus upload_link: PUT mit der Datei als Body oder POST multipart (Feld file)."""
+        d = svc.drops.take(did)
+        if not d:
+            return JSONResponse({"error": "not_found", "message": "Adresse unbekannt, abgelaufen oder schon benutzt"}, status_code=404)
+        limit = config.max_upload_mb * 1024 * 1024
+        ctype = request.headers.get("content-type", "")
+        if ctype.startswith("multipart/form-data"):
+            form = await request.form()
+            f = form.get("file")
+            if f is None or not hasattr(f, "read"):
+                return JSONResponse({"error": "bad_request", "message": "Feld „file“ fehlt"}, status_code=400)
+            data = await f.read(limit + 1)
+        else:
+            buf = bytearray()
+            async for chunk in request.stream():
+                buf += chunk
+                if len(buf) > limit:
+                    break
+            data = bytes(buf)
+        try:
+            res = svc.store.upload(d["path"], data, d["agent"], overwrite=d["overwrite"])
+            res["embed"] = f"![[{res['path']}]]"
+            return res
         except Exception as e:
             return err(e)
 
