@@ -23,6 +23,7 @@ from .config import Config
 from .index import Index
 from .mcp_server import build_mcp
 from .render import render
+from .optimize import Optimizer
 from .scope import SCOPE_HEADER
 from .service import Service
 from .store import Conflict, Rejected
@@ -516,6 +517,24 @@ def create_app(config: Config, start_background: bool = True) -> FastAPI:
     def trash_empty(request: Request):
         try:
             return svc.store.purge(None, agent(request))
+        except Exception as e:
+            return err(e)
+
+    @app.post("/api/optimize/plan")
+    def optimize_plan(data: dict = Body(...)):
+        try:
+            with svc.lock:
+                p = Optimizer(svc.store).plan(data.get("path", ""), data.get("level") or None, data.get("description"))
+            p.pop("_other", None)
+            return p
+        except Exception as e:
+            return err(e)
+
+    @app.post("/api/optimize/apply")
+    def optimize_apply(request: Request, data: dict = Body(...)):
+        try:
+            return Optimizer(svc.store).apply(data.get("path", ""), agent(request), data.get("base_version", ""),
+                                              data.get("level") or None, data.get("description"))
         except Exception as e:
             return err(e)
 

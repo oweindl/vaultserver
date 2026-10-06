@@ -234,6 +234,7 @@ $("#tree").addEventListener("contextmenu", (ev) => {
   else menu(ev, [
     ["Öffnen", () => n.click()],
     ["Umbenennen/verschieben …", () => askMove(p)],
+    ...(p.endsWith(".md") ? [["Optimieren (aufteilen) …", () => optimize(p)]] : []),
     ["Löschen …", () => delPath(p)],
   ]);
 });
@@ -382,6 +383,92 @@ async function delPath(path, isDir = false) {
 }
 const delNote = (path) => delPath(path);
 
+
+// ------------------------------------------------------------------ Optimieren: große Notiz aufteilen
+
+async function optimize(path) {
+  const dlg = $("#opt");
+  const st = { path, level: null, description: null, sel: 0, plan: null, busy: false };
+  dlg.innerHTML = `<div class="opt-head"><b>Optimieren:</b> <span>${esc(path)}</span><span class="spacer"></span><button id="opt-x" title="Schließen">✕</button></div>
+    <div class="opt-body"><p class="empty">Analysiere …</p></div>`;
+  dlg.showModal();
+  $("#opt-x").onclick = () => dlg.close();
+  const load = async () => {
+    try {
+      st.plan = await api("POST", "/api/optimize/plan", { path, level: st.level, description: st.description });
+      st.level = st.plan.level; render();
+    } catch (e) {
+      dlg.querySelector(".opt-body").innerHTML = `<div class="banner warn">${esc(e.message)}</div>`;
+    }
+  };
+  // Liste der neuen Dateien: 0 = Inhaltsverzeichnis, 1… = Teile
+  const files = () => [{ path: st.plan.index.path, title: "Inhaltsverzeichnis (neu)", content: st.plan.index.content, lines: null, index: true }, ...st.plan.parts];
+  const origHtml = () => st.plan.original.split("\n").map((l, i) =>
+    `<div class="ln" id="ol-${i + 1}"><span class="no">${i + 1}</span><span class="tx">${esc(l) || " "}</span></div>`).join("");
+  const showFile = (k) => {
+    st.sel = k; const f = files()[k];
+    dlg.querySelectorAll(".opt-files li").forEach((li, i) => li.classList.toggle("on", i === k));
+    dlg.querySelector(".opt-file-name").textContent = f.path;
+    dlg.querySelector(".opt-file pre").textContent = f.content;
+    dlg.querySelectorAll(".opt-orig .ln.hl").forEach((x) => x.classList.remove("hl"));
+    if (f.lines) {
+      for (let i = f.lines[0]; i <= f.lines[1]; i++) dlg.querySelector(`#ol-${i}`)?.classList.add("hl");
+      dlg.querySelector(`#ol-${f.lines[0]}`)?.scrollIntoView({ block: "start" });
+    }
+    dlg.querySelector(".opt-file pre").scrollTop = 0;
+  };
+  const render = () => {
+    const p = st.plan, c = p.check;
+    const ok = c.ok && !p.blocking.length;
+    const lv = Object.entries(p.levels).map(([l, n]) => `<button data-lv="${l}" class="${+l === p.level ? "primary" : ""}">${"#".repeat(+l)} (${n})</button>`).join("");
+    dlg.querySelector(".opt-body").innerHTML = `
+      <div class="opt-bar">
+        <span>Aufteilen an Ebene: ${lv}</span>
+        <span class="banner ${c.ok ? "ok" : "warn"}">${c.ok
+          ? `✓ Vollständig: alle ${c.total} Inhaltszeilen des Originals (ohne Leerzeilen) stehen in den ${c.files} neuen Dateien`
+          : `✕ Unvollständig: ${c.covered} von ${c.total} Inhaltszeilen – ${c.missing.length} fehlen, ${c.extra.length} zusätzlich`}</span>
+      </div>
+      ${p.blocking.map((b) => `<div class="banner warn">${esc(b)}</div>`).join("")}
+      ${!c.ok ? `<details class="banner warn" open><summary>Abweichungen</summary>${c.missing.map((m) => `<div>fehlt Zeile ${m.line}: <code>${esc(m.text)}</code></div>`).join("")}${c.extra.map((x) => `<div>zusätzlich: <code>${esc(x)}</code></div>`).join("")}</details>` : ""}
+      <div class="opt-cols">
+        <section class="opt-orig"><h4>Original <span class="hp">${esc(p.path)} · ${p.original.split("\n").length} Zeilen</span></h4><div class="src">${origHtml()}</div></section>
+        <section class="opt-new">
+          <h4>Neue Struktur</h4>
+          <label class="hp" for="opt-desc">Kurze Beschreibung im Inhaltsverzeichnis</label>
+          <textarea id="opt-desc" rows="2">${esc(p.description)}</textarea>
+          <ul class="opt-files">${files().map((f, i) => `<li data-k="${i}"><span class="ic">${f.index ? "📑" : "📄"}</span> ${esc(f.index ? f.path.split("/").pop() : f.path.slice(p.folder.length + 1))}
+            <span class="hp">${f.index ? "ersetzt das Original" : `Zeilen ${f.lines ? f.lines.join("–") : "–"}`}</span></li>`).join("")}</ul>
+          <div class="opt-nav"><button id="opt-prev">◀</button><span class="opt-file-name"></span><button id="opt-next">▶</button></div>
+          <div class="opt-file"><pre></pre></div>
+          ${p.links.length ? `<div class="hp">Links auf Abschnitte werden angepasst in: ${p.links.map((l) => `${esc(l.note)} (${l.changes})`).join(", ")}</div>` : ""}
+        </section>
+      </div>
+      <div class="opt-foot">
+        <span class="hp">Ordner <code>${esc(p.folder)}/</code> mit ${p.parts.length} Dateien · Original geht in den Papierkorb · ein Git-Commit</span>
+        <span class="spacer"></span><button id="opt-cancel">Abbrechen</button>
+        <button class="primary" id="opt-go" ${ok ? "" : "disabled"}>Optimierung durchführen</button>
+      </div>`;
+    dlg.querySelectorAll("[data-lv]").forEach((b) => (b.onclick = () => { st.level = +b.dataset.lv; st.sel = 0; load(); }));
+    dlg.querySelectorAll(".opt-files li").forEach((li) => (li.onclick = () => showFile(+li.dataset.k)));
+    $("#opt-prev").onclick = () => showFile((st.sel + files().length - 1) % files().length);
+    $("#opt-next").onclick = () => showFile((st.sel + 1) % files().length);
+    let t;
+    $("#opt-desc").oninput = (ev) => { clearTimeout(t); t = setTimeout(() => { st.description = ev.target.value; const k = st.sel; load().then(() => showFile(k)); }, 600); };
+    $("#opt-cancel").onclick = () => dlg.close();
+    $("#opt-go").onclick = async () => {
+      if (!confirm(`„${p.path}“ jetzt in ${p.parts.length} Dateien aufteilen?\nDas Original kommt in den Papierkorb und lässt sich wiederherstellen.`)) return;
+      try {
+        const r = await api("POST", "/api/optimize/apply", { path: p.path, base_version: p.version, level: p.level, description: $("#opt-desc").value });
+        dlg.close(); toast(`Aufgeteilt in ${r.parts.length} Dateien${r.updated_notes.length ? `, Links in ${r.updated_notes.length} Notiz(en) angepasst` : ""}`, 4500);
+        state.open.add(p.folder); localStorage.setItem("vs-open", JSON.stringify([...state.open]));
+        await loadTree(); go(`#/note/${enc(p.path)}`);
+      } catch (e) { fail(e); load(); }
+    };
+    showFile(Math.min(st.sel, files().length - 1));
+  };
+  load();
+}
+
 // ------------------------------------------------------------------ Papierkorb
 
 async function showTrash() {
@@ -468,6 +555,7 @@ async function showNote(path, anchor, edit) {
   $("#b-more").onclick = (ev) => { ev.stopPropagation(); menu(ev, [
     ["Umbenennen/verschieben …", () => askMove(path)],
     ["Rohtext anzeigen", () => openViewer(path)],
+    ["Optimieren (aufteilen) …", () => optimize(path)],
     ["Löschen …", () => delNote(path)],
   ]); };
   if ($("#b-claim")) $("#b-claim").onclick = async () => {

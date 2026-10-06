@@ -32,6 +32,24 @@ Die Markdown-Dateien im Git-Repo bleiben die Quelle der Wahrheit. Ein SQLite-FTS
 - MCP: `recycle_bin`, `restore`, `create_folder`.
 - Der Ordner `RecycleBin` wird beim Start und nach jedem Pull angelegt, falls er fehlt.
 
+### Optimieren: große Notizen aufteilen
+
+Rechtsklick auf eine Notiz (oder ⋯ in der Notiz) › **Optimieren (aufteilen) …** öffnet eine Vorschau. Dabei wird noch nichts geändert.
+
+- **Ebene:** Vorschlag ist die oberste Überschriften-Ebene, die mindestens zweimal vorkommt. Im Fenster lässt sich auf `##`, `###` … umschalten.
+- **Links das Original** mit Zeilennummern, **rechts die neuen Dateien** zum Durchklicken (◀ ▶). Die Zeilen der gewählten Teildatei werden im Original markiert.
+- **Neue Dateien:**
+  - `Name/00 Einleitung.md` für den Text vor der ersten Überschrift.
+  - `Name/01 <Überschrift>.md` … für jeden Abschnitt.
+  - Eine neue `Name.md` mit Frontmatter und Titel des Originals, einer bearbeitbaren Kurzbeschreibung und dem Inhaltsverzeichnis. Links auf `[[Name]]` bleiben gültig.
+- **Prüfung:** Jede Inhaltszeile des Originals muss genau einmal und in derselben Reihenfolge in den neuen Dateien stehen. Ohne vollständige Prüfung ist „Optimierung durchführen“ gesperrt.
+- **Links:**
+  - Abschnitts-Links aus anderen Notizen (`[[Name#Kapitel]]`, auch Block-Anker `#^id`) und innerhalb der Notiz (`[[#Kapitel]]`) werden auf die Teildatei umgeschrieben.
+  - Relative Bild- und Dateilinks in den Teilen bekommen `../`.
+- **Ausführen:** Das Original geht in den Papierkorb, dazu kommt ein Commit mit allen neuen und geänderten Dateien.
+- **Rückgängig:** Neue `Name.md` und den Ordner löschen (beides in den Papierkorb), dann das Original wiederherstellen.
+- **Nicht aufteilbar:** Einträge und Übersichten in Bereichen mit Regeln (Fixliste, Features).
+
 ## Einrichtung für Claude
 
 Alles Nötige steht in der Web-Oberfläche unter **Konto › Einrichtung (Claude/MCP)** (`/#/setup`):
