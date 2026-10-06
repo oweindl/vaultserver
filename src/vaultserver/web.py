@@ -22,6 +22,7 @@ from .config import Config
 from .index import Index
 from .mcp_server import build_mcp
 from .render import render
+from .scope import SCOPE_HEADER
 from .service import Service
 from .store import Conflict, Rejected
 
@@ -138,15 +139,32 @@ def create_app(config: Config, start_background: bool = True) -> FastAPI:
             path = request.url.path
             auth = request.headers.get("authorization", "")
             token = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
-            machine = svc.clients.lookup(token) if token else None
+            found = svc.clients.lookup_full(token) if token else None
+            machine, bound = found if found else (None, None)
             if path == "/mcp" or path.startswith("/mcp/"):
                 if not machine:
                     return JSONResponse({"error": "Bearer-Token fehlt oder ist ungültig"}, status_code=401)
+                # /mcp/<projekt> -> /mcp mit Projekt-Kopfzeile; ein projektgebundener Token gilt immer nur dort
+                wanted = path[len("/mcp/"):].strip("/") if path.startswith("/mcp/") else ""
+                if wanted and wanted not in svc.projects():
+                    return JSONResponse({"error": f"Projekt „{wanted}“ gibt es nicht",
+                                         "projects": sorted(svc.projects())}, status_code=404)
+                if bound and wanted and wanted != bound:
+                    return JSONResponse({"error": f"Dieser Zugang gilt nur für das Projekt „{bound}“"}, status_code=403)
+                scope_name = bound or wanted
+                request.scope["path"] = "/mcp"
+                request.scope["raw_path"] = b"/mcp"
+                hdrs = [(k, v) for k, v in request.scope["headers"] if k.lower() != SCOPE_HEADER.encode()]
+                if scope_name:
+                    hdrs.append((SCOPE_HEADER.encode(), scope_name.encode()))
+                request.scope["headers"] = hdrs
                 return await call_next(request)
             if path.startswith("/api/") and path not in ("/api/login", "/api/logout"):
                 user = read_session(request.cookies.get(COOKIE, ""), key, users)
                 if not user and not machine:
                     return JSONResponse({"error": "Anmeldung erforderlich"}, status_code=401)
+                if not user and bound and path != "/api/me":
+                    return JSONResponse({"error": f"Dieser Zugang gilt nur für MCP im Projekt „{bound}“"}, status_code=403)
                 request.state.user = user
                 request.state.agent = f"web/{user}" if user else f"{machine}/api"
             return await call_next(request)
@@ -245,6 +263,7 @@ def create_app(config: Config, start_background: bool = True) -> FastAPI:
             "tools": [{"name": t.name, "description": (t.description or "").split("\n")[0],
                        "readonly": bool(t.annotations and getattr(t.annotations, "read_only_hint", getattr(t.annotations, "readOnlyHint", False)))} for t in tools],
             "clients": svc.clients.list(),
+            "projects": [{"name": p.name, "folder": p.folder, "start": p.start or None} for p in svc.projects().values()],
             "areas": [a.name for a in config.areas],
             "vault": config.vault_path.name,
             "git_push": config.git_push,
@@ -255,10 +274,27 @@ def create_app(config: Config, start_background: bool = True) -> FastAPI:
         if not web_user(request):
             return only_web()
         try:
-            out = svc.clients.create(data.get("name", ""))
+            project = data.get("project") or None
+            if project and project not in svc.projects():
+                raise ValueError(f"Projekt „{project}“ gibt es nicht")
+            out = svc.clients.create(data.get("name", ""), project)
         except ValueError as e:
             return err(e)
         log.info("MCP-Zugang angelegt: %s (von %s)", out["name"], web_user(request))
+        return out
+
+    @app.put("/api/clients/{cid}")
+    def client_update(request: Request, cid: str, data: dict = Body(...)):
+        if not web_user(request):
+            return only_web()
+        project = data.get("project") or None
+        try:
+            if project and project not in svc.projects():
+                raise ValueError(f"Projekt „{project}“ gibt es nicht")
+            out = svc.clients.set_project(cid, project)
+        except (KeyError, ValueError) as e:
+            return err(e)
+        log.info("MCP-Zugang %s: Projekt %s (von %s)", out["name"], project or "alle", web_user(request))
         return out
 
     @app.post("/api/clients/{cid}/renew")

@@ -568,27 +568,28 @@ async function showHome() {
 }
 
 
-// ------------------------------------------------------------------ Einrichtung (MCP-Zugänge, Anleitungen)
+// ------------------------------------------------------------------ Einrichtung (MCP-Zugänge, Projekte, Anleitungen)
 
 function copyText(text) {
   // navigator.clipboard gibt es nur in sicheren Kontexten (HTTPS/localhost); im LAN über HTTP der alte Weg
-  if (navigator.clipboard && window.isSecureContext) return navigator.clipboard.writeText(text).then(() => toast("Kopiert"));
+  if (navigator.clipboard && window.isSecureContext) return navigator.clipboard.writeText(text);
   const ta = document.createElement("textarea"); ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
-  document.body.append(ta); ta.select();
-  try { document.execCommand("copy"); toast("Kopiert"); } catch { toast("Kopieren nicht möglich – bitte markieren"); }
+  (document.querySelector("dialog[open]") || document.body).append(ta); ta.select();
+  try { document.execCommand("copy"); } catch { toast("Kopieren nicht möglich – bitte markieren"); }
   ta.remove();
 }
-const codeBlock = (text) => `<div class="copy"><pre><code>${esc(text)}</code></pre><button type="button" data-copy="${esc(text)}">Kopieren</button></div>`;
+const codeBlock = (text, id = "") => `<div class="copy"><pre><code${id ? ` id="${id}"` : ""}>${esc(text)}</code></pre><button type="button" data-copy="${esc(text)}">Kopieren</button></div>`;
 function wireCopy(root) {
   root.querySelectorAll("[data-copy]").forEach((b) => (b.onclick = async () => {
     await copyText(b.dataset.copy);
-    b.textContent = "Kopiert ✓"; setTimeout(() => (b.textContent = "Kopieren"), 1600);  // Toast liegt im Dialog verdeckt
+    b.textContent = "Kopiert ✓"; setTimeout(() => (b.textContent = "Kopieren"), 1600);  // Toast läge im Dialog verdeckt
   }));
 }
 
-const MCP_URL = () => `${location.origin}/mcp`;
-const setupTexts = (token = "<TOKEN>", name = "<RECHNER>") => {
-  const url = MCP_URL();
+const mcpUrl = (project) => `${location.origin}/mcp${project ? `/${project}` : ""}`;
+const ALL = "alle Projekte";
+const setupTexts = (token = "<TOKEN>", project = null) => {
+  const url = mcpUrl(project);
   return {
     claudeCode: `claude mcp add --scope user --transport http vaultserver ${url} \\\n  --header "Authorization: Bearer ${token}"`,
     claudeCodeCheck: `claude mcp list        # vaultserver: ✓ Connected\n# in Claude Code: /mcp  zeigt vaultserver mit den Werkzeugen`,
@@ -597,17 +598,25 @@ const setupTexts = (token = "<TOKEN>", name = "<RECHNER>") => {
       env: { VAULT_AUTH: `Bearer ${token}` } } } }, null, 2),
     curl: `curl -s ${url} \\\n  -H "Authorization: Bearer ${token}" \\\n  -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" \\\n  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'`,
     claudeMd: `## Vault (VaultServer)\n\nProjektwissen, Fixliste, Features und Status liegen im Vault und werden **nur über den MCP-Server \`vaultserver\`** gelesen und geändert (nicht über das Obsidian-Plugin, nicht per Dateizugriff).\n\n- Zu Beginn jeder Sitzung \`guide\` aufrufen, bei Arbeit an der Fixliste \`guide(area="Fixliste")\`.\n- Erst \`search\`/\`query\`/\`outline\`, dann \`read\` mit \`section\` – keine großen Dateien komplett lesen.\n- Schreiben mit \`base_version\` aus dem letzten \`read\`; Status mit \`set_property\`, Abschnitte mit \`patch_section\`, neue FIX/Features mit \`create_from_template\`.\n- Eigenschaften enthalten nur kanonische Werte (siehe \`guide\`); Details (Commit, Branch, Test) gehören in „Umsetzung“.\n- Vor längerer Arbeit an einem Eintrag \`claim\`, danach \`release\`. Nachtläufe beginnen mit \`changes_since\`.\n`,
-    name,
   };
 };
+// .mcp.json für ein Code-Repo: Projekt-Adresse, Token aus der Umgebung (die Datei darf ins Repo)
+const repoJson = (project) => JSON.stringify({ mcpServers: { vaultserver: {
+  type: "http", url: mcpUrl(project), headers: { Authorization: "Bearer ${VAULTSERVER_TOKEN}" } } } }, null, 2);
+const envTexts = (token = "<TOKEN>") => ({
+  linux: `echo 'export VAULTSERVER_TOKEN=${token}' >> ~/.profile   # danach neu anmelden oder: source ~/.profile`,
+  windows: `setx VAULTSERVER_TOKEN "${token}"   # danach Terminal und Claude Code neu starten`,
+});
 
 function tokenDialog(out, title) {
-  const t = setupTexts(out.token, out.name), dlg = $("#dlg"), form = $("#dlg-form");
+  const t = setupTexts(out.token, out.project), e = envTexts(out.token), dlg = $("#dlg"), form = $("#dlg-form");
   form.innerHTML = `<h3>${esc(title)}: ${esc(out.name)}</h3>
-    <div class="banner warn">Der Token wird <b>nur jetzt</b> angezeigt. Gleich in Claude Code eintragen oder sicher ablegen.</div>
+    <div class="banner warn">Der Token wird <b>nur jetzt</b> angezeigt. Gleich auf dem Rechner eintragen oder sicher ablegen.</div>
+    ${out.project ? `<div class="banner info">Dieser Zugang gilt nur für das Projekt <b>${esc(out.project)}</b> – auch über <code>/mcp</code> sieht er nur dieses Projekt.</div>` : ""}
     <div class="setup">
       <h4>Token</h4>${codeBlock(out.token)}
-      <h4>Claude Code (auf dem Rechner ${esc(out.name)})</h4>${codeBlock(t.claudeCode)}
+      <h4>Als Umgebungsvariable (für .mcp.json in Code-Repos)</h4>${codeBlock(e.linux)}${codeBlock(e.windows)}
+      <h4>Oder direkt in Claude Code (für alle Projekte dieses Rechners)</h4>${codeBlock(t.claudeCode)}
       <h4>Claude Desktop (claude_desktop_config.json)</h4>${codeBlock(t.desktop)}
     </div>
     <div class="btns"><button class="primary" value="ok">Fertig</button></div>`;
@@ -616,10 +625,13 @@ function tokenDialog(out, title) {
   dlg.returnValue = ""; dlg.showModal();
 }
 
-async function newClient() {
-  const r = await dialog("Neuer MCP-Zugang", [{ name: "name", label: "Name des Rechners (erscheint in den Commits)", placeholder: "z. B. laptop-oliver", required: true }], "Anlegen");
+async function newClient(projects) {
+  const r = await dialog("Neuer MCP-Zugang", [
+    { name: "name", label: "Name des Rechners (erscheint in den Commits)", placeholder: "z. B. laptop-oliver", required: true },
+    { name: "project", label: "Zugriff auf", type: "select", options: [ALL, ...projects.map((p) => p.name)], value: ALL },
+  ], "Anlegen");
   if (!r?.name) return;
-  try { tokenDialog(await api("POST", "/api/clients", { name: r.name }), "Neuer Zugang"); } catch (e) { fail(e); }
+  try { tokenDialog(await api("POST", "/api/clients", { name: r.name, project: r.project === ALL ? null : r.project }), "Neuer Zugang"); } catch (e) { fail(e); }
 }
 
 async function showSetup() {
@@ -628,52 +640,74 @@ async function showSetup() {
   const t = setupTexts();
   const ago = (ts) => (ts ? fmtDate(ts) : "–");
   const ro = d.tools.filter((x) => x.readonly), rw = d.tools.filter((x) => !x.readonly);
+  const first = d.projects[0]?.name || "";
+  const projOptions = (sel) => `<option value="">${ALL}</option>` + d.projects.map((p) => `<option value="${esc(p.name)}" ${p.name === sel ? "selected" : ""}>${esc(p.name)}</option>`).join("");
   $("#content").innerHTML = `<div class="results setup">
     <h2>Einrichtung: VaultServer als Vault für Claude</h2>
-    <p>Claude Code und Claude Desktop greifen über den eingebauten <b>MCP-Server</b> auf diesen Vault zu: suchen, gezielt Abschnitte lesen, Einträge anlegen und ändern – jede Änderung wird ein Git-Commit mit dem Namen des Rechners. Jeder Rechner bekommt einen eigenen Zugang (Bearer-Token).</p>
+    <p>Claude Code und Claude Desktop greifen über den eingebauten <b>MCP-Server</b> auf diesen Vault zu: suchen, gezielt Abschnitte lesen, Einträge anlegen und ändern – jede Änderung wird ein Git-Commit mit dem Namen des Rechners. Jeder Rechner bekommt einen eigenen Zugang (Bearer-Token). Über eine <b>Projekt-Adresse</b> sieht Claude nur einen Ordner des Vaults.</p>
 
     <h3>1 · Verbindung</h3>
     <table class="kv">
-      <tr><th>MCP-URL</th><td>${codeBlock(MCP_URL())}</td></tr>
+      <tr><th>Ganzer Vault</th><td>${codeBlock(mcpUrl())}</td></tr>
+      <tr><th>Ein Projekt</th><td><code>${esc(location.origin)}/mcp/&lt;projekt&gt;</code> – siehe 2</td></tr>
       <tr><th>Transport</th><td>Streamable HTTP (<code>--transport http</code>)</td></tr>
-      <tr><th>Anmeldung</th><td>Kopfzeile <code>Authorization: Bearer &lt;Token&gt;</code>, ein Token je Rechner (unten anlegen)</td></tr>
+      <tr><th>Anmeldung</th><td>Kopfzeile <code>Authorization: Bearer &lt;Token&gt;</code>, ein Token je Rechner (siehe 3)</td></tr>
       <tr><th>Optional</th><td>Kopfzeile <code>X-VaultServer-Agent: &lt;Werkzeug&gt;</code> – zweiter Teil des Autors in Commits (Standard <code>claude-code</code>)</td></tr>
       <tr><th>Vault</th><td><code>${esc(d.vault)}</code> · Bereiche mit Regeln: ${d.areas.map((a) => `<code>${esc(a)}</code>`).join(", ") || "–"} · Push nach jeder Änderung: ${d.git_push ? "ja" : "nein"}</td></tr>
     </table>
     ${location.protocol === "http:" ? `<div class="banner info">Der Server spricht HTTP ohne TLS – gedacht fürs LAN. Tokens nicht über fremde Netze schicken.</div>` : ""}
 
-    <h3>2 · Zugänge (Rechner)</h3>
+    <h3>2 · Projekte</h3>
+    <p>Über die Projekt-Adresse sehen alle Werkzeuge nur diesen Ordner: Suche, Liste, Änderungen, Prüfung und <code>guide</code> beziehen sich nur auf das Projekt, Pfade sind <b>relativ</b> zum Projektordner (<code>Fixliste/FIX-001.md</code>), Schreiben außerhalb wird abgelehnt. <code>guide</code> nennt die Einstiegsnotiz des Projekts.</p>
     <table class="list">
-      <tr><th>Name</th><th>Herkunft</th><th>Angelegt</th><th>Zuletzt benutzt</th><th></th></tr>
-      ${d.clients.map((c) => `<tr><td><b>${esc(c.name)}</b></td><td>${c.source === "config" ? "vaultserver.toml" : "Oberfläche"}</td>
-        <td>${ago(c.created)}</td><td>${ago(c.last_seen)}</td>
+      <tr><th>Projekt</th><th>Ordner</th><th>Einstieg</th><th>MCP-Adresse</th></tr>
+      ${d.projects.map((p) => `<tr><td><b>${esc(p.name)}</b></td><td>${esc(p.folder)}</td>
+        <td>${p.start ? `<a href="#/note/${enc(p.start)}">${esc(p.start.slice(p.folder.length + 1))}</a>` : "–"}</td>
+        <td>${codeBlock(mcpUrl(p.name))}</td></tr>`).join("") || `<tr><td colspan="4">Keine Projekte gefunden.</td></tr>`}
+    </table>
+    <p class="hp">Projekte = Ordner der obersten Ebene. Eigene Namen oder Einstiegsnotizen: Abschnitt <code>[projects]</code> in <code>vaultserver.toml</code>.</p>
+    <h4>Pro Code-Repo automatisch das richtige Projekt</h4>
+    <ol>
+      <li>Im Code-Repo eine Datei <code>.mcp.json</code> anlegen (darf ins Repo, der Token steht nicht drin). Projekt:
+        <select id="proj-pick">${d.projects.map((p) => `<option ${p.name === first ? "selected" : ""}>${esc(p.name)}</option>`).join("")}</select>
+        ${codeBlock(repoJson(first), "proj-json")}</li>
+      <li>Auf jedem Rechner einmal den Token als Umgebungsvariable <code>VAULTSERVER_TOKEN</code> setzen (Befehl erscheint beim Anlegen des Zugangs).</li>
+      <li>Claude Code im Repo starten und die Frage nach dem Projekt-Server einmal bestätigen. Im Repo gilt dann die Projekt-Adresse; sie hat Vorrang vor einer allgemeinen Einbindung gleichen Namens.</li>
+    </ol>
+
+    <h3>3 · Zugänge (Rechner)</h3>
+    <table class="list">
+      <tr><th>Name</th><th>Zugriff auf</th><th>Herkunft</th><th>Zuletzt benutzt</th><th></th></tr>
+      ${d.clients.map((c) => `<tr><td><b>${esc(c.name)}</b></td>
+        <td><select data-proj="${esc(c.id)}" data-name="${esc(c.name)}">${projOptions(c.project)}</select></td>
+        <td>${c.source === "config" ? "vaultserver.toml" : `Oberfläche, ${ago(c.created)}`}</td><td>${ago(c.last_seen)}</td>
         <td class="act"><button data-renew="${esc(c.id)}" data-name="${esc(c.name)}">Neuer Token</button> <button data-revoke="${esc(c.id)}" data-name="${esc(c.name)}">Sperren</button></td></tr>`).join("")
         || `<tr><td colspan="5">Noch keine Zugänge.</td></tr>`}
     </table>
     <p><button class="primary" id="btn-new-client">Neuen Zugang anlegen …</button>
-      <span class="hp">„Neuer Token“ ersetzt den alten sofort (z. B. wenn er bekannt geworden ist); danach den Rechner neu einbinden.</span></p>
+      <span class="hp">Ein auf ein Projekt beschränkter Zugang sieht immer nur dieses Projekt, auch über <code>/mcp</code>. „Neuer Token“ ersetzt den alten sofort (z. B. wenn er bekannt geworden ist).</span></p>
 
-    <h3>3 · Claude Code einbinden</h3>
+    <h3>4 · Claude Code einbinden</h3>
     <ol>
-      <li>Auf dem Rechner, auf dem Claude Code läuft (Token aus Schritt 2 einsetzen):${codeBlock(t.claudeCode)}</li>
+      <li>Für den ganzen Vault auf diesem Rechner (Token aus 3 einsetzen; für ein Projekt die Projekt-Adresse aus 2 nehmen oder die <code>.mcp.json</code>):${codeBlock(t.claudeCode)}</li>
       <li>Prüfen:${codeBlock(t.claudeCodeCheck)}</li>
-      <li>Damit Claude den Vault auch benutzt: diesen Block in <code>~/.claude/CLAUDE.md</code> (für alle Projekte) oder in die <code>CLAUDE.md</code> eines Projekts:${codeBlock(t.claudeMd)}</li>
+      <li>Damit Claude den Vault auch benutzt: diesen Block in <code>~/.claude/CLAUDE.md</code> (für alle Projekte) oder in die <code>CLAUDE.md</code> eines Repos:${codeBlock(t.claudeMd)}</li>
       <li>Alte Obsidian-Einbindung entfernen, falls vorhanden: <code>claude mcp remove obsidian</code></li>
     </ol>
 
-    <h3>4 · Claude Desktop (Windows, macOS)</h3>
+    <h3>5 · Claude Desktop (Windows, macOS)</h3>
     <ol>
       <li>Node.js 18 oder neuer installieren (für die Brücke <code>mcp-remote</code>).</li>
       <li>Claude Desktop › Einstellungen › Entwickler › <i>Konfiguration bearbeiten</i> öffnet <code>claude_desktop_config.json</code>
-        (Windows <code>%APPDATA%\\Claude\\</code>, macOS <code>~/Library/Application Support/Claude/</code>). Eintragen bzw. unter <code>mcpServers</code> ergänzen:${codeBlock(t.desktop)}</li>
+        (Windows <code>%APPDATA%\\Claude\\</code>, macOS <code>~/Library/Application Support/Claude/</code>). Eintragen bzw. unter <code>mcpServers</code> ergänzen (für ein Projekt die Projekt-Adresse einsetzen):${codeBlock(t.desktop)}</li>
       <li>Claude Desktop ganz beenden und neu starten; im Eingabefeld unter „Werkzeuge“ erscheint <b>vaultserver</b>.</li>
     </ol>
     <p class="hp">„Benutzerdefinierten Konnektor hinzufügen“ in den Einstellungen funktioniert hier nicht: Diese Konnektoren werden über die Anthropic-Cloud verbunden und erreichen einen Server im LAN nicht. Deshalb der Weg über die Konfigurationsdatei.</p>
 
-    <h3>5 · claude.ai im Browser und Claude-App auf dem Handy</h3>
+    <h3>6 · claude.ai im Browser und Claude-App auf dem Handy</h3>
     <p>Derzeit nicht möglich. claude.ai verbindet Konnektoren aus dem Internet und braucht dafür eine öffentlich erreichbare HTTPS-Adresse mit OAuth-Anmeldung. VaultServer ist bewusst nur im LAN erreichbar und kennt nur Bearer-Tokens. Möglich wäre es später über HTTPS mit Reverse-Proxy und OAuth – das öffnet den Vault aber nach außen.</p>
 
-    <h3>6 · Andere MCP-Programme und Test</h3>
+    <h3>7 · Andere MCP-Programme und Test</h3>
     <p>Jedes Programm, das MCP über Streamable HTTP mit eigener Kopfzeile kann, verbindet sich mit URL und Token wie oben. Schnelltest von der Kommandozeile:</p>${codeBlock(t.curl)}
 
     <h3>Werkzeuge (${d.tools.length})</h3>
@@ -683,7 +717,18 @@ async function showSetup() {
   </div>`;
   const c = $("#content");
   wireCopy(c);
-  $("#btn-new-client").onclick = newClient;
+  const pick = $("#proj-pick");
+  if (pick) pick.onchange = () => {
+    const txt = repoJson(pick.value), box = $("#proj-json").closest(".copy");
+    $("#proj-json").textContent = txt; box.querySelector("button").dataset.copy = txt;
+  };
+  $("#btn-new-client").onclick = () => newClient(d.projects);
+  c.querySelectorAll("[data-proj]").forEach((sel) => (sel.onchange = async () => {
+    try {
+      await api("PUT", `/api/clients/${sel.dataset.proj}`, { project: sel.value || null });
+      toast(`„${sel.dataset.name}“: ${sel.value ? `nur Projekt ${sel.value}` : "ganzer Vault"}`);
+    } catch (e) { fail(e); showSetup(); }
+  }));
   c.querySelectorAll("[data-revoke]").forEach((b) => (b.onclick = async () => {
     if (!confirm(`Zugang „${b.dataset.name}“ sperren? Der Rechner kommt danach nicht mehr an den Vault.`)) return;
     try { await api("DELETE", `/api/clients/${b.dataset.revoke}`); toast(`„${b.dataset.name}“ gesperrt`); showSetup(); } catch (e) { fail(e); }

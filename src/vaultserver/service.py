@@ -13,6 +13,7 @@ from .index import Index
 from .semantic import Semantic
 from .store import Store, find_section
 from .clients import Clients
+from .scope import Project, load_projects
 
 log = logging.getLogger("vaultserver")
 
@@ -58,6 +59,12 @@ class Service:
         self.last_error: str = ""
         with self.lock:
             self.index.sync()
+
+    # ------------------------------------------------------------ Projekte
+
+    def projects(self) -> dict[str, Project]:
+        """Projekt-Kontexte (bei automatischer Erkennung jedes Mal frisch, neue Ordner gelten sofort)."""
+        return load_projects(self.config)
 
     # ------------------------------------------------------------ guide (Idee 1)
 

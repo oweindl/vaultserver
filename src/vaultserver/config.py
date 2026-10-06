@@ -44,6 +44,8 @@ class Config:
     groups: dict[str, dict[str, list[str]]] = field(default_factory=dict)
     areas: list[Area] = field(default_factory=list)
     status_note: str = ""               # Idee 5: Notiz mit automatischem Statusblock
+    # Projekt-Kontexte: Name -> Ordner oder {folder, start}; leer = Ordner der obersten Ebene
+    projects: dict = field(default_factory=dict)
 
     host: str = "0.0.0.0"
     port: int = 8100
@@ -97,6 +99,7 @@ class Config:
                     for k, v in data.get("groups", {}).items()},
             areas=areas,
             status_note=data.get("status_note", ""),
+            projects=data.get("projects", {}),
             host=server.get("host", "0.0.0.0"),
             port=server.get("port", 8100),
             tokens={v: k for k, v in server.get("tokens", {}).items()},

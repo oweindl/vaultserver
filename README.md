@@ -29,6 +29,32 @@ Alles Nötige steht in der Web-Oberfläche unter **Konto › Einrichtung (Claude
   - Test mit `curl`.
 - **Liste der Werkzeuge.**
 
+### Projekt-Kontexte
+
+Jeder Ordner der obersten Ebene ist ein Projekt mit eigener MCP-Adresse, z. B. `http://192.168.1.32:8100/mcp/finance-app`. Über diese Adresse gilt:
+
+- Alle Werkzeuge sehen nur diesen Ordner.
+- Pfade gehen relativ zum Projektordner hinein und heraus (`Fixliste/FIX-001.md`).
+- Schreiben außerhalb des Projekts wird abgelehnt.
+- `guide` nennt die Einstiegsnotiz des Projekts (`Projektbeschreibung.md`, `README.md` …).
+
+Eigene Namen oder Einstiegsnotizen legst du in `vaultserver.toml` fest:
+
+```toml
+[projects]
+cmt = { folder = "ContentManagementTool", start = "Projektbeschreibung.md" }
+finance = "Finance App"
+```
+
+Ein Zugang lässt sich in der Einrichtungsseite auf ein Projekt beschränken. Er sieht dann auch über `/mcp` nur dieses Projekt. Für andere Projekte kommt 403, und auf die REST-API hat er keinen Zugriff.
+
+Pro Code-Repo kann eine `.mcp.json` die Projekt-Adresse festlegen. Der Token kommt aus der Umgebungsvariable `VAULTSERVER_TOKEN`, deshalb darf die Datei ins Repo:
+
+```json
+{ "mcpServers": { "vaultserver": { "type": "http", "url": "http://192.168.1.32:8100/mcp/finance-app",
+  "headers": { "Authorization": "Bearer ${VAULTSERVER_TOKEN}" } } } }
+```
+
 Kurzfassung für Claude Code:
 
 ```

@@ -43,6 +43,7 @@ class Clients:
         data.setdefault("tokens", [])      # [{name, hash, created}]
         data.setdefault("revoked", [])     # SHA-256 gesperrter Tokens aus der Konfiguration
         data.setdefault("last_seen", {})   # id -> Zeitpunkt
+        data.setdefault("projects", {})    # id -> Projektname (Zugang nur für dieses Projekt)
         return data
 
     def _save(self) -> None:
@@ -56,6 +57,11 @@ class Clients:
 
     def lookup(self, token: str) -> str | None:
         """Rechnername zum Token oder None (unbekannt oder gesperrt)."""
+        found = self.lookup_full(token)
+        return found[0] if found else None
+
+    def lookup_full(self, token: str) -> tuple[str, str | None] | None:
+        """(Rechnername, Projekt oder None) zum Token; None, wenn unbekannt oder gesperrt."""
         if not token:
             return None
         h = _sha(token)
@@ -65,9 +71,10 @@ class Clients:
             name = self.config.tokens.get(token)
             if name is None:
                 name = next((t["name"] for t in self._data["tokens"] if secrets.compare_digest(t["hash"], h)), None)
-            if name is not None:
-                self._touch(h[:12])
-            return name
+            if name is None:
+                return None
+            self._touch(h[:12])
+            return name, self._data["projects"].get(h[:12])
 
     def _touch(self, cid: str) -> None:
         now = time.time()
@@ -83,29 +90,46 @@ class Clients:
 
     def list(self) -> list[dict]:
         with self._lock:
-            seen = self._data["last_seen"]
+            seen, projects = self._data["last_seen"], self._data["projects"]
             out = []
             for token, name in self.config.tokens.items():
                 h = _sha(token)
                 if h in self._data["revoked"]:
                     continue
-                out.append({"id": h[:12], "name": name, "source": "config", "created": None, "last_seen": seen.get(h[:12])})
+                out.append({"id": h[:12], "name": name, "source": "config", "created": None, "last_seen": seen.get(h[:12]),
+                            "project": projects.get(h[:12])})
             for t in self._data["tokens"]:
                 out.append({"id": t["hash"][:12], "name": t["name"], "source": "web", "created": t["created"],
-                            "last_seen": seen.get(t["hash"][:12])})
+                            "last_seen": seen.get(t["hash"][:12]), "project": projects.get(t["hash"][:12])})
             return sorted(out, key=lambda c: c["name"].lower())
 
-    def create(self, name: str) -> dict:
+    def create(self, name: str, project: str | None = None) -> dict:
         name = (name or "").strip()
         if not NAME_RE.match(name):
             raise ValueError("Name: 1–40 Zeichen, Buchstaben, Ziffern, Punkt, Minus, Unterstrich (z. B. laptop-oliver)")
         if any(c["name"].lower() == name.lower() for c in self.list()):
             raise ValueError(f"Einen Zugang „{name}“ gibt es schon – erst sperren oder „Neuer Token“ verwenden")
         token = secrets.token_urlsafe(32)
+        cid = _sha(token)[:12]
         with self._lock:
             self._data["tokens"].append({"name": name, "hash": _sha(token), "created": time.time()})
+            if project:
+                self._data["projects"][cid] = project
             self._save()
-        return {"id": _sha(token)[:12], "name": name, "token": token}
+        return {"id": cid, "name": name, "token": token, "project": project or None}
+
+    def set_project(self, cid: str, project: str | None) -> dict:
+        """Zugang auf ein Projekt beschränken (oder mit None wieder für den ganzen Vault freigeben)."""
+        entry = next((c for c in self.list() if c["id"] == cid), None)
+        if not entry:
+            raise KeyError(f"Zugang {cid} nicht gefunden")
+        with self._lock:
+            if project:
+                self._data["projects"][cid] = project
+            else:
+                self._data["projects"].pop(cid, None)
+            self._save()
+        return {**entry, "project": project or None}
 
     def revoke(self, cid: str) -> str:
         """Sperrt einen Zugang; liefert den Namen."""
@@ -114,17 +138,21 @@ class Clients:
                 if t["hash"][:12] == cid:
                     self._data["tokens"].remove(t)
                     self._data["last_seen"].pop(cid, None)
+                    self._data["projects"].pop(cid, None)
                     self._save()
                     return t["name"]
             for token, name in self.config.tokens.items():
                 h = _sha(token)
                 if h[:12] == cid and h not in self._data["revoked"]:
                     self._data["revoked"].append(h)
+                    self._data["projects"].pop(cid, None)
                     self._save()
                     return name
         raise KeyError(f"Zugang {cid} nicht gefunden")
 
     def renew(self, cid: str) -> dict:
-        """Neuer Token mit gleichem Namen, der alte ist sofort ungültig."""
+        """Neuer Token mit gleichem Namen und gleichem Projekt, der alte ist sofort ungültig."""
+        with self._lock:
+            project = self._data["projects"].get(cid)
         name = self.revoke(cid)
-        return self.create(name)
+        return self.create(name, project)

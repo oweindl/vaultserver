@@ -197,3 +197,14 @@ dialog .btns { display: flex; justify-content: flex-end; gap: 8px; margin-top: 1
 .setup .hp { color: var(--muted); font-size: 13px; }
 #dlg .setup { max-width: 760px; }
 @media (max-width: 700px) { .setup td.act { white-space: normal; } .setup table.list th:nth-child(3), .setup table.list td:nth-child(3) { display: none; } }
+.setup code { overflow-wrap: anywhere; }
+@media (max-width: 700px) {
+  .setup table.kv th, .setup table.kv td { display: block; width: auto; border: 0; padding: 4px 0; }
+  .setup table.kv tr { display: block; border-bottom: 1px solid var(--line); padding: 4px 0; }
+  /* Listen als Karten: jede Zeile ein Block, Kopfzeile weg */
+  .setup table.list:not(.tools) tr:first-child { display: none; }
+  .setup table.list:not(.tools) tr { display: block; border-bottom: 1px solid var(--line); padding: 6px 0; }
+  .setup table.list:not(.tools) td { display: block; border: 0; padding: 2px 0; text-align: left; }
+  .setup table.list:not(.tools) td:nth-child(3) { display: block; }
+  .setup table.list select { max-width: 100%; }
+}
