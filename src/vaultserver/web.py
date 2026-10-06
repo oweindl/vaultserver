@@ -138,7 +138,7 @@ def create_app(config: Config, start_background: bool = True) -> FastAPI:
             path = request.url.path
             auth = request.headers.get("authorization", "")
             token = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
-            machine = config.tokens.get(token) if token else None
+            machine = svc.clients.lookup(token) if token else None
             if path == "/mcp" or path.startswith("/mcp/"):
                 if not machine:
                     return JSONResponse({"error": "Bearer-Token fehlt oder ist ungültig"}, status_code=401)
@@ -227,6 +227,61 @@ def create_app(config: Config, start_background: bool = True) -> FastAPI:
         return {"agent": agent(request), "user": getattr(request.state, "user", None), "areas": [a.name for a in config.areas],
                 "semantic": bool(svc.semantic), "last_error": svc.last_error,
                 "git": svc.store.git.enabled, "push": config.git_push}
+
+    # -------------------------------------------------------------- Einrichtung: MCP-Zugänge
+
+    def web_user(request: Request) -> str | None:
+        return getattr(request.state, "user", None)
+
+    def only_web():
+        return JSONResponse({"error": "Nur mit Web-Anmeldung möglich"}, status_code=403)
+
+    @app.get("/api/setup")
+    async def setup(request: Request):
+        if not web_user(request):
+            return only_web()
+        tools = await mcp.list_tools()
+        return {
+            "tools": [{"name": t.name, "description": (t.description or "").split("\n")[0],
+                       "readonly": bool(t.annotations and getattr(t.annotations, "read_only_hint", getattr(t.annotations, "readOnlyHint", False)))} for t in tools],
+            "clients": svc.clients.list(),
+            "areas": [a.name for a in config.areas],
+            "vault": config.vault_path.name,
+            "git_push": config.git_push,
+        }
+
+    @app.post("/api/clients")
+    def client_create(request: Request, data: dict = Body(...)):
+        if not web_user(request):
+            return only_web()
+        try:
+            out = svc.clients.create(data.get("name", ""))
+        except ValueError as e:
+            return err(e)
+        log.info("MCP-Zugang angelegt: %s (von %s)", out["name"], web_user(request))
+        return out
+
+    @app.post("/api/clients/{cid}/renew")
+    def client_renew(request: Request, cid: str):
+        if not web_user(request):
+            return only_web()
+        try:
+            out = svc.clients.renew(cid)
+        except (KeyError, ValueError) as e:
+            return err(e)
+        log.info("MCP-Zugang erneuert: %s (von %s)", out["name"], web_user(request))
+        return out
+
+    @app.delete("/api/clients/{cid}")
+    def client_revoke(request: Request, cid: str):
+        if not web_user(request):
+            return only_web()
+        try:
+            name = svc.clients.revoke(cid)
+        except KeyError as e:
+            return err(e)
+        log.info("MCP-Zugang gesperrt: %s (von %s)", name, web_user(request))
+        return {"ok": True, "name": name}
 
     # -------------------------------------------------------------- lesen
 

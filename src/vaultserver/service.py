@@ -12,6 +12,7 @@ from .config import Config
 from .index import Index
 from .semantic import Semantic
 from .store import Store, find_section
+from .clients import Clients
 
 log = logging.getLogger("vaultserver")
 
@@ -48,6 +49,7 @@ class Service:
         self.config = config
         self.index = Index(config)
         self.store = Store(config, self.index)
+        self.clients = Clients(config)
         self.lock = self.store.lock
         self.semantic = (Semantic(self.index, config.ollama_url, config.ollama_model)
                          if config.semantic_enabled else None)

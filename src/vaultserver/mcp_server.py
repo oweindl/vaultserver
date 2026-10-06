@@ -25,7 +25,7 @@ def agent_from(ctx: Context | None, svc: Service) -> str:
     headers = (ctx.headers if ctx else None) or {}
     auth = headers.get("authorization", "")
     token = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
-    machine = svc.config.tokens.get(token, "unbekannt")
+    machine = svc.clients.lookup(token) or "unbekannt"
     tool = headers.get("x-vaultserver-agent", "claude-code")
     return f"{machine}/{tool}"
 

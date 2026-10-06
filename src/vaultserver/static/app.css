@@ -181,3 +181,19 @@ dialog .btns { display: flex; justify-content: flex-end; gap: 8px; margin-top: 1
   header .logo { display: none; }
   header label { display: none; }
 }
+
+/* Einrichtung */
+.setup h3 { margin-top: 26px; }
+.setup h4 { margin: 14px 0 4px; font-size: 14px; }
+.setup ol { padding-left: 20px; } .setup li { margin: 6px 0; }
+.copy { position: relative; margin: 6px 0; }
+.copy pre { background: var(--code); padding: 10px 84px 10px 12px; border-radius: 6px; overflow: auto; margin: 0; font: 12.5px/1.45 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.copy button { position: absolute; top: 6px; right: 6px; font-size: 12px; }
+.setup table { border-collapse: collapse; width: 100%; font-size: 14px; }
+.setup table th, .setup table td { text-align: left; vertical-align: top; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+.setup table.kv th { width: 120px; color: var(--muted); font-weight: 500; }
+.setup table.kv .copy { margin: 0; }
+.setup td.act { white-space: nowrap; text-align: right; }
+.setup .hp { color: var(--muted); font-size: 13px; }
+#dlg .setup { max-width: 760px; }
+@media (max-width: 700px) { .setup td.act { white-space: normal; } .setup table.list th:nth-child(3), .setup table.list td:nth-child(3) { display: none; } }

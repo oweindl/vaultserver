@@ -14,7 +14,22 @@ Die Markdown-Dateien im Git-Repo bleiben die Quelle der Wahrheit. Ein SQLite-FTS
 | `http://<host>:8100/mcp` | MCP-Server (Streamable HTTP, Bearer-Token je Rechner) |
 | `http://<host>:8100/api/…` | REST für die Web-Oberfläche |
 
-Einbindung in Claude Code:
+## Einrichtung für Claude
+
+Alles Nötige steht in der Web-Oberfläche unter **Konto › Einrichtung (Claude/MCP)** (`/#/setup`):
+
+- **Verbindung:** MCP-URL, Transport, Kopfzeilen.
+- **Zugänge je Rechner:** anlegen, „Neuer Token“, sperren, mit „zuletzt benutzt“.
+  - Neue Tokens werden nur einmal angezeigt und nur als SHA-256 in `data/tokens.json` gespeichert.
+  - Tokens aus `vaultserver.toml` lassen sich dort sperren oder ersetzen.
+- **Anleitungen:**
+  - Claude Code, mit dem Block für `CLAUDE.md`.
+  - Claude Desktop über `mcp-remote`.
+  - Warum claude.ai im Browser nicht geht.
+  - Test mit `curl`.
+- **Liste der Werkzeuge.**
+
+Kurzfassung für Claude Code:
 
 ```
 claude mcp add --scope user --transport http vaultserver http://192.168.1.32:8100/mcp --header "Authorization: Bearer <token>"
