@@ -12,7 +12,7 @@ import os
 import re
 import sqlite3
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
 from .config import Config
@@ -123,6 +123,8 @@ class SyncStats:
     unchanged: int = 0
     attachments: int = 0
     seconds: float = 0.0
+    changed_paths: list = field(default_factory=list)   # neu oder geändert (Notizen und Anhänge)
+    removed_paths: list = field(default_factory=list)   # nicht mehr vorhanden
 
 
 def norm_key(key: str) -> str:
@@ -174,6 +176,7 @@ class Index:
                  for r in self.db.execute("SELECT path, version, mtime, size FROM notes")}
         seen_notes: set[str] = set()
         seen_att: set[str] = set()
+        known_att = {r["path"]: (r["size"], r["mtime"]) for r in self.db.execute("SELECT path, size, mtime FROM attachments")}
         with self.db:
             for full, rel in self._walk():
                 if rel.lower().endswith(".md"):
@@ -193,10 +196,13 @@ class Index:
                         stats.updated += 1
                     else:
                         stats.added += 1
+                    stats.changed_paths.append(rel)
                     self._index_note(rel, data, version, st.st_mtime)
                 else:
                     seen_att.add(rel)
                     st = full.stat()
+                    if known_att.get(rel) != (st.st_size, st.st_mtime):
+                        stats.changed_paths.append(rel)
                     mime = mimetypes.guess_type(rel)[0] or "application/octet-stream"
                     self.db.execute(
                         "INSERT OR REPLACE INTO attachments(path, type, size, mtime) VALUES (?,?,?,?)",
@@ -205,9 +211,11 @@ class Index:
             for rel in set(known) - seen_notes:
                 self._remove_note(rel)
                 stats.removed += 1
+                stats.removed_paths.append(rel)
             for (rel,) in self.db.execute("SELECT path FROM attachments").fetchall():
                 if rel not in seen_att:
                     self.db.execute("DELETE FROM attachments WHERE path = ?", (rel,))
+                    stats.removed_paths.append(rel)
             stats.attachments = len(seen_att)
             if stats.added or stats.updated or stats.removed:
                 self._resolve_links()

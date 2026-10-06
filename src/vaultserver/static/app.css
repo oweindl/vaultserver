@@ -255,3 +255,7 @@ dialog.opt[open] { display: flex; flex-direction: column; }
   .opt-foot { flex-wrap: wrap; }
 }
 @media (prefers-color-scheme: dark) { .banner.ok { background: #1f3a26; color: #9fe0ad; } }
+
+/* Live-Anzeige */
+#live { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); opacity: .5; display: inline-block; margin-left: -4px; flex: none; }
+#live.on { background: #2e9d4f; opacity: 1; box-shadow: 0 0 0 3px rgb(46 157 79 / .18); }

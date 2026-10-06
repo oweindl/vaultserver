@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import contextlib
 import hashlib
@@ -15,7 +16,7 @@ import time
 from pathlib import Path, PurePosixPath
 
 from fastapi import Body, FastAPI, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from mcp.server.transport_security import TransportSecuritySettings
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -537,6 +538,31 @@ def create_app(config: Config, start_background: bool = True) -> FastAPI:
                                               data.get("level") or None, data.get("description"))
         except Exception as e:
             return err(e)
+
+    @app.get("/api/events")
+    async def events(request: Request):
+        """Server-Sent Events: Änderungen am Vault (Baum, offene Notiz, Listen live aktualisieren)."""
+        last = request.headers.get("last-event-id") or request.query_params.get("since")
+        start = int(last) if last and last.isdigit() else svc.feed.rev
+
+        async def stream():
+            rev, idle = start, 0.0
+            yield f"retry: 3000\nid: {rev}\ndata: {json.dumps({'hello': True, 'rev': rev})}\n\n"
+            while not await request.is_disconnected():
+                evs, reset = svc.feed.since(rev)
+                if reset:
+                    rev = svc.feed.rev
+                    yield f"id: {rev}\ndata: {json.dumps({'reset': True, 'rev': rev})}\n\n"
+                for e in evs:
+                    rev = e["rev"]
+                    yield f"id: {rev}\ndata: {json.dumps(e, ensure_ascii=False)}\n\n"
+                idle = 0.0 if evs else idle + 0.5
+                if idle >= 20:
+                    idle = 0.0
+                    yield ": ping\n\n"
+                await asyncio.sleep(0.5)
+        return StreamingResponse(stream(), media_type="text/event-stream",
+                                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
     @app.get("/api/projects")
     def projects():

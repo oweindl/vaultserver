@@ -14,6 +14,24 @@ Die Markdown-Dateien im Git-Repo bleiben die Quelle der Wahrheit. Ein SQLite-FTS
 | `http://<host>:8100/mcp` | MCP-Server (Streamable HTTP, Bearer-Token je Rechner) |
 | `http://<host>:8100/api/…` | REST für die Web-Oberfläche |
 
+### Live-Aktualisierung
+
+Der Dienst gleicht den Index ständig mit den Dateien ab:
+- Datei-Wächter alle `watch_seconds` (Standard 3 s), auch für neue leere Ordner.
+- `git pull` alle `pull_seconds`.
+- Jede Änderung über Web oder MCP sofort.
+
+Jede Änderung wird als Ereignis gemeldet. Die Web-Oberfläche hört über Server-Sent Events (`/api/events`) mit, der grüne Punkt neben dem Logo zeigt die Verbindung. Bei einem Ereignis gilt:
+
+- **Baum:** lädt neu, wenn Dateien oder Ordner dazukommen oder wegfallen. Der Papierkorb-Zähler läuft mit.
+- **Offene Notiz:** wird neu angezeigt, mit gleicher Scrollposition und Hinweis „geändert von …“.
+  - Im Editor ohne ungespeicherte Eingaben wird der neue Stand übernommen.
+  - Mit Eingaben erscheint ein Hinweis, beim Speichern dann die Konfliktansicht.
+  - Ist die Notiz verschoben oder gelöscht, erscheint ein Hinweis.
+- **Listen** (Start, Änderungen, Aufgaben, Prüfung, Papierkorb, Suche) laden neu.
+
+Reißt die Verbindung ab, baut der Browser sie selbst wieder auf und holt verpasste Ereignisse nach. Zusätzlich frischt er den Baum alle 2 Minuten auf.
+
 ### Vaults, Ordner und Papierkorb
 
 - **Vault-Auswahl über dem Baum:** „all“ oder ein Stammordner (z. B. Moon). Die Auswahl filtert Baum, Suche, Änderungen, Aufgaben, Prüfung und Papierkorb, und der Browser merkt sie sich.

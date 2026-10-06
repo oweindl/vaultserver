@@ -13,6 +13,7 @@ from .index import Index
 from .semantic import Semantic
 from .store import Store, find_section
 from .clients import Clients
+from .live import Feed
 from .scope import Project, load_projects
 
 log = logging.getLogger("vaultserver")
@@ -53,6 +54,8 @@ class Service:
         self.index = Index(config)
         self.store = Store(config, self.index)
         self.clients = Clients(config)
+        self.feed = Feed(config.vault_path, config.recycle_folder)
+        self.store.on_change = self.feed.publish
         self.lock = self.store.lock
         self.semantic = (Semantic(self.index, config.ollama_url, config.ollama_model)
                          if config.semantic_enabled else None)
@@ -152,6 +155,17 @@ class Service:
 
     # ------------------------------------------------------------ Hintergrund
 
+    def scan(self):
+        """Datei-Wächter: Index mit den Dateien abgleichen und Änderungen an die Live-Anzeige melden."""
+        with self.lock:
+            st = self.index.sync()
+        if st.added or st.updated or st.removed:
+            log.info("Datei-Wächter: +%d ~%d -%d", st.added, st.updated, st.removed)
+        if st.changed_paths or st.removed_paths:
+            self.feed.publish(st.changed_paths + st.removed_paths, "Datei-Wächter")
+        self.feed.check_folders()
+        return st
+
     def start(self) -> None:
         self._thread = threading.Thread(target=self._loop, name="vaultserver-bg", daemon=True)
         self._thread.start()
@@ -168,10 +182,7 @@ class Service:
             now = time.time()
             try:
                 if c.watch_seconds:
-                    with self.lock:
-                        st = self.index.sync()
-                    if st.added or st.updated or st.removed:
-                        log.info("Datei-Wächter: +%d ~%d -%d", st.added, st.updated, st.removed)
+                    self.scan()
                 if c.git_pull_seconds and now - last["pull"] >= c.git_pull_seconds:
                     last["pull"] = now
                     r = self.store.pull()

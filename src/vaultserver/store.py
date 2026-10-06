@@ -132,6 +132,8 @@ class Store:
         # Version -> Text früherer Stände, für Abschnitts-Patches gegen ältere Versionen
         self._history: OrderedDict[str, str] = OrderedDict()
         self.dirty_push = False
+        # Rückmeldung an die Live-Anzeige: (Pfade, Agent) – gesetzt vom Service
+        self.on_change = None
 
     # ------------------------------------------------------------ Hilfen
 
@@ -184,6 +186,13 @@ class Store:
         tmp.write_text(text, encoding="utf-8")
         os.replace(tmp, full)
 
+    def _notify(self, paths: list[str], agent: str) -> None:
+        if self.on_change and paths:
+            try:
+                self.on_change(list(paths), agent)
+            except Exception:  # noqa: BLE001 – Live-Anzeige darf Schreiben nie stören
+                pass
+
     def _finish(self, paths: list[str], message: str, agent: str) -> str | None:
         for p in paths:
             self.index.index_file(p)
@@ -192,6 +201,7 @@ class Store:
             commit = self.git.commit(paths, f"{self._agent_label(agent)}: {message}", self._agent_label(agent))
             if commit:
                 self.dirty_push = True
+        self._notify(paths, agent)
         return commit
 
     def _check_version(self, path: str, base_version: str | None, current_text: str | None,
@@ -641,6 +651,7 @@ class Store:
             commit = self.git.commit(paths, f"{self._agent_label(agent)}: {message}", self._agent_label(agent))
             if commit:
                 self.dirty_push = True
+        self._notify(paths, agent)
         return commit
 
     def _entry(self, entry_id: str) -> tuple[Path, dict]:
@@ -1037,7 +1048,14 @@ class Store:
             self.git.pull(self.config.git_remote, self.config.git_branch)
             after = self.git.head()
             st = self.index.sync() if before != after else None
-            return {"pulled": before != after, "head": after, "sync": vars(st) if st else None}
+            if st:
+                try:
+                    files = [p for _s, p in self.git.changed_files(before)]
+                except Exception:  # noqa: BLE001
+                    files = st.changed_paths + st.removed_paths
+                self._notify(files or ["."], "git pull")
+            return {"pulled": before != after, "head": after,
+                    "sync": {k: getattr(st, k) for k in ("added", "updated", "removed")} if st else None}
 
     def push(self) -> dict:
         with self.lock:

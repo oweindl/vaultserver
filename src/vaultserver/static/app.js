@@ -46,7 +46,7 @@ $("#login-form").addEventListener("submit", async (ev) => {
     $("#login").style.display = "none"; $("#login-err").textContent = ""; boot();
   } catch (e) { $("#login-err").textContent = e.message; }
 });
-async function logout() { await api("POST", "/api/logout"); location.hash = ""; showLogin(); }
+async function logout() { live.es?.close(); await api("POST", "/api/logout"); location.hash = ""; showLogin(); }
 
 async function changePassword() {
   const r = await dialog(`Passwort ändern${state.me?.user ? ` (${state.me.user})` : ""}`, [
@@ -942,6 +942,73 @@ $("#btn-more").onclick = (ev) => { ev.stopPropagation(); menu(ev, [
 ]); };
 $("#toggle-tree").onclick = () => document.body.classList.toggle("tree-open");
 
+
+// ------------------------------------------------------------------ Live: Änderungen von Claude (MCP), Git, anderen Browsern
+
+const live = { es: null, timer: {}, rev: 0 };
+const later = (key, ms, fn) => { clearTimeout(live.timer[key]); live.timer[key] = setTimeout(fn, ms); };
+function treeHas(path) {
+  if (!state.tree) return false;
+  let n = state.tree; const parts = path.split("/");
+  for (let i = 0; i < parts.length - 1; i++) { n = n.dirs[parts[i]]; if (!n) return false; }
+  return n.files.some((f) => f.path === path);
+}
+function liveDot(on, title) {
+  const d = $("#live"); if (!d) return;
+  d.classList.toggle("on", on); d.title = title;
+}
+function connectLive() {
+  if (live.es) live.es.close();
+  live.es = new EventSource(`/api/events${live.rev ? `?since=${live.rev}` : ""}`);
+  live.es.onopen = () => liveDot(true, "Live: Änderungen erscheinen sofort");
+  live.es.onerror = () => liveDot(false, "Live-Verbindung unterbrochen – wird neu aufgebaut");
+  live.es.onmessage = (m) => { try { onLive(JSON.parse(m.data)); } catch (e) { console.error(e); } };
+}
+function onLive(ev) {
+  if (ev.rev) live.rev = ev.rev;
+  if (ev.hello) return;
+  if (ev.reset) { later("tree", 200, loadTree); refreshView(); return; }
+  const paths = ev.paths || [], removed = ev.removed || [];
+  if (ev.tree || removed.length || paths.some((p) => !treeHas(p))) later("tree", 400, () => loadTree().catch(() => {}));
+  const cur = state.note?.path;
+  if (cur && removed.includes(cur)) noteGone(ev);
+  else if (cur && paths.includes(cur)) noteChanged(ev);
+  else if (!location.hash.startsWith("#/note/")) later("view", 800, refreshView);
+}
+function refreshView() {
+  const h = location.hash;
+  if (h.startsWith("#/note/") || h.startsWith("#/setup")) return;   // Einrichtung: Eingaben nicht zurücksetzen
+  if ($("dialog[open]")) return;
+  route();
+}
+async function noteChanged(ev) {
+  const path = state.note.path;
+  const n = await get(`/api/note?path=${encodeURIComponent(path)}&raw=1`).catch(() => null);
+  if (!n || n.version === (state.editor ? state.base : state.note.version)) return;   // eigene Änderung / schon aktuell
+  const who = ev.agent || "jemand";
+  if (state.editor) {
+    if (!state.dirty) {   // nichts eingetippt: still übernehmen
+      const cur = state.editor.getCursor(); state.editor.setValue(n.text); state.editor.setCursor(cur);
+      state.base = n.version; state.dirty = false; state.note.version = n.version;
+      toast(`Aktualisiert – geändert von ${who}`);
+    } else {
+      $("#e-banner").innerHTML = `<div class="banner warn">Diese Notiz wurde gerade von <b>${esc(who)}</b> geändert. Beim Speichern erscheint die Konfliktansicht.
+        <button id="e-reload">Neu laden (eigene Änderungen verwerfen)</button></div>`;
+      $("#e-reload").onclick = () => { state.dirty = false; showNote(path, null, true); };
+    }
+    return;
+  }
+  const c = $("#center"), y = c.scrollTop;
+  await showNote(path);
+  c.scrollTop = y;
+  toast(`Aktualisiert – geändert von ${who}`);
+}
+function noteGone(ev) {
+  const where = $(state.editor ? "#e-banner" : "#content");
+  const html = `<div class="banner warn">Diese Notiz wurde von <b>${esc(ev.agent || "jemand")}</b> verschoben oder gelöscht (Papierkorb). <a href="#/trash">Papierkorb</a> · <a href="#/">Start</a></div>`;
+  if (state.editor) where.innerHTML = html; else where.insertAdjacentHTML("afterbegin", html);
+}
+
 // ------------------------------------------------------------------ Start
 
 async function boot() {
@@ -952,8 +1019,9 @@ async function boot() {
     g.areas.forEach((a) => (state.guide[a.name] = a));
     await loadTree();
     route();
+    connectLive();
   } catch (e) { if (e.status !== 401) toast(e.message); }
 }
 boot();
-// Baum alle 30 s auffrischen (Änderungen durch Agenten)
-setInterval(() => { if (!document.hidden && state.tree) loadTree().catch(() => {}); }, 30000);
+// Rückfall, falls die Live-Verbindung hängt: Baum alle 2 Minuten auffrischen
+setInterval(() => { if (!document.hidden && state.tree) loadTree().catch(() => {}); }, 120000);
