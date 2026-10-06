@@ -102,6 +102,7 @@ status = ["offen", "in arbeit", "teilweise (test)", "erledigt (test)", "abgenomm
 soft_kb = 20
 hard_kb = 50
 folder_notes = 25
+max_upload_mb = 25      # größte Datei beim Hochladen (Web und MCP)
 
 # Projekte (optional; ohne Angabe ist jeder Stammordner ein Projekt). Je Projekt eigene Grenzen und eine
 # Regel-Notiz (Standard: _Regeln.md im Projektordner), deren Inhalt guide mitliefert.

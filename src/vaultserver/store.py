@@ -542,14 +542,34 @@ class Store:
             out.append(line)
         return "\n".join(out)
 
-    def upload(self, path: str, data: bytes, agent: str, message: str | None = None) -> dict:
+    def upload(self, path: str, data: bytes, agent: str, message: str | None = None,
+               overwrite: bool = False) -> dict:
+        """Datei (auch Bild/Binärdatei) speichern. Gibt es den Namen schon, wird ohne overwrite ein freier
+        Name gewählt („bild (2).png“) – nie still überschrieben. Größe höchstens max_upload_mb."""
+        path = path.strip().strip("/")
+        limit = self.config.max_upload_mb * 1024 * 1024
+        if len(data) > limit:
+            raise Rejected(f"Datei mit {len(data) / 1048576:.1f} MB ist zu groß (höchstens {self.config.max_upload_mb} MB)")
+        if not PurePosixPath(path).name or path.endswith("/"):
+            raise Rejected("Dateiname fehlt")
+        if self._in_bin(path):
+            raise Rejected(f"Nicht in den Papierkorb {self.bin} hochladen")
         with self.lock:
             full = self._abs(path)
+            renamed = False
+            if full.exists() and not overwrite:
+                pp = PurePosixPath(path)
+                stem, suffix, k = pp.stem, pp.suffix, 2
+                while True:
+                    cand = str(pp.with_name(f"{stem} ({k}){suffix}"))
+                    if not self._abs(cand).exists():
+                        path, full, renamed = cand, self._abs(cand), True
+                        break
+                    k += 1
             full.parent.mkdir(parents=True, exist_ok=True)
             full.write_bytes(data)
-            self.index.sync()
             commit = self._finish([path], message or f"Anhang: {path}", agent)
-            return {"path": path, "size": len(data), "commit": commit}
+            return {"path": path, "size": len(data), "renamed": renamed, "commit": commit}
 
     # ------------------------------------------------------------ Ordner und Papierkorb
 

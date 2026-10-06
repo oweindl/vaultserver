@@ -14,6 +14,18 @@ Die Markdown-Dateien im Git-Repo bleiben die Quelle der Wahrheit. Ein SQLite-FTS
 | `http://<host>:8100/mcp` | MCP-Server (Streamable HTTP, Bearer-Token je Rechner) |
 | `http://<host>:8100/api/…` | REST für die Web-Oberfläche |
 
+### Bilder und Dateien
+
+Hochladen geht für jeden Dateityp: Bilder, PDFs und andere Binärdateien, bis `max_upload_mb` (Standard 25 MB, `[limits]`).
+
+- **Web:**
+  - Rechtsklick auf einen Ordner › „Datei hochladen …“ oder Dateien auf einen Ordner im Baum ziehen.
+  - Im Editor ein Bild **per Strg+V einfügen** (z. B. einen Screenshot), **hineinziehen** oder über **„Bild einfügen …“** wählen. Bilder landen im Unterordner `Bilder` neben der Notiz, z. B. als `Bild 2026-10-06 061200.png`. An der Cursorstelle steht dann `![[Pfad]]`.
+- **Gleicher Name:** Eine vorhandene Datei wird nie still überschrieben. Die neue bekommt einen freien Namen (`bild (2).png`), und das Ergebnis nennt den tatsächlichen Pfad. Bewusst ersetzen geht mit `overwrite=true`.
+- **MCP:**
+  - `upload(path, data_base64)` lädt hoch. Das Ergebnis enthält `embed` mit dem fertigen `![[voller Pfad]]`.
+  - `read_file(path)` gibt Bilder (png/jpg/gif/webp bis 5 MB) als Bild zurück, das Claude ansehen kann. Andere Dateien bis 2 MB kommen als Base64.
+
 ### Größenregeln: Notizen klein halten
 
 Große Notizen machen das Lesen teuer, und parallel arbeitende Agenten kommen sich häufiger in die Quere. Deshalb gelten Grenzen:

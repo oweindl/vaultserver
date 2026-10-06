@@ -194,11 +194,34 @@ async function moveItem(src, target) {
 const allFiles = () => { const out = []; const w = (n) => { n.files.forEach((f) => out.push(f.path)); Object.values(n.dirs).forEach(w); }; w(state.tree); return out; };
 const isDir = (p) => { let n = state.tree; for (const part of p.split("/")) { n = n.dirs[part]; if (!n) return false; } return true; };
 
-async function uploadFile(folder, file) {
+async function uploadFile(folder, file, name) {
   const fd = new FormData(); fd.append("file", file);
-  const r = await fetch(`/api/upload?folder=${encodeURIComponent(folder)}`, { method: "POST", body: fd });
-  if (!r.ok) return fail(new Error((await r.json()).message || r.statusText));
-  toast(`Hochgeladen: ${file.name}`); loadTree();
+  const q = `folder=${encodeURIComponent(folder)}${name ? `&name=${encodeURIComponent(name)}` : ""}`;
+  const r = await fetch(`/api/upload?${q}`, { method: "POST", body: fd });
+  const res = await r.json().catch(() => ({}));
+  if (!r.ok) { fail(new Error(res.message || res.error || r.statusText)); return null; }
+  toast(res.renamed ? `Hochgeladen als ${res.path.split("/").pop()} (Name war vergeben)` : `Hochgeladen: ${res.path.split("/").pop()}`);
+  loadTree();
+  return res;
+}
+
+// Bilder und Dateien in eine Notiz einfügen: Upload nach „Bilder/“ neben der Notiz, Link an der Cursorstelle
+const IMG_EXT = { "image/png": "png", "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp", "image/svg+xml": "svg" };
+function pastedName(file) {
+  const raw = file.name && !/^image\.(png|jpe?g|gif|webp)$/i.test(file.name) ? file.name : "";   // Zwischenablage heißt meist image.png
+  if (raw) return raw;
+  const d = new Date(), p = (n) => String(n).padStart(2, "0");
+  return `Bild ${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}.${IMG_EXT[file.type] || "png"}`;
+}
+async function insertFiles(cm, notePath, files) {
+  const dir = notePath.split("/").slice(0, -1).join("/");
+  for (const f of files) {
+    const isImg = f.type.startsWith("image/");
+    const res = await uploadFile(isImg ? (dir ? `${dir}/Bilder` : "Bilder") : dir, f, pastedName(f));
+    if (!res) continue;
+    cm.replaceSelection(`${isImg ? "!" : ""}[[${res.path}]]` + "\n");
+    cm.focus();
+  }
 }
 
 // Kontextmenü
@@ -614,6 +637,7 @@ function editNote() {
       <div class="path">${esc(n.path)} – bearbeiten</div>
       <div class="actions">
         <input type="text" id="e-msg" placeholder="Änderungsnotiz (optional)" style="width:220px">
+        <button id="e-img" title="Bild oder Datei einfügen – auch per Strg+V oder Hineinziehen">Bild einfügen …</button>
         <button id="e-cancel">Abbrechen</button>
         <button id="e-save" class="primary" title="Strg+S">Speichern</button>
       </div>
@@ -635,6 +659,23 @@ function editNote() {
   cm.on("inputRead", (c, ch) => { if (ch.text[0] === "[" && c.getRange({ line: ch.from.line, ch: ch.from.ch - 1 }, ch.from) === "[") wikiHint(c); });
   $("#e-cancel").onclick = () => { if (!state.dirty || confirm("Änderungen verwerfen?")) { state.dirty = false; go(`#/note/${enc(n.path)}`); } };
   $("#e-save").onclick = () => save();
+  $("#e-img").onclick = () => {
+    const i = document.createElement("input"); i.type = "file"; i.multiple = true; i.accept = "image/*,application/pdf,*/*";
+    i.onchange = () => insertFiles(cm, n.path, [...i.files]); i.click();
+  };
+  // Strg+V mit Bild in der Zwischenablage, Dateien hineinziehen
+  cm.on("paste", (c, ev) => {
+    const files = [...(ev.clipboardData?.files || [])];
+    if (!files.length) return;
+    ev.preventDefault(); insertFiles(c, n.path, files);
+  });
+  cm.on("drop", (c, ev) => {
+    const files = [...(ev.dataTransfer?.files || [])];
+    if (!files.length) return;
+    ev.preventDefault();
+    c.setCursor(c.coordsChar({ left: ev.clientX, top: ev.clientY }));
+    insertFiles(c, n.path, files);
+  });
   renderSide(n);
 
   async function save(force = false) {

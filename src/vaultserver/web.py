@@ -589,11 +589,14 @@ def create_app(config: Config, start_background: bool = True) -> FastAPI:
             return err(e)
 
     @app.post("/api/upload")
-    async def upload(request: Request, folder: str, file: UploadFile):
-        data = await file.read()
-        target = f"{folder.strip('/')}/{file.filename}" if folder.strip("/") else file.filename
+    async def upload(request: Request, folder: str, file: UploadFile, name: str | None = None, overwrite: bool = False):
+        """Datei hochladen (beliebiger Typ). name: anderer Dateiname (z. B. für eingefügte Bilder)."""
+        limit = config.max_upload_mb * 1024 * 1024
+        data = await file.read(limit + 1)
+        fname = PurePosixPath((name or file.filename or "").replace("\\", "/")).name
+        target = f"{folder.strip('/')}/{fname}" if folder.strip("/") else fname
         try:
-            return svc.store.upload(target, data, agent(request))
+            return svc.store.upload(target, data, agent(request), overwrite=overwrite)
         except Exception as e:
             return err(e)
 

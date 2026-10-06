@@ -51,6 +51,7 @@ class Config:
     soft_kb: int = 20
     hard_kb: int = 50
     folder_notes: int = 25
+    max_upload_mb: int = 25             # größte Datei beim Hochladen (Web und MCP)
     # Papierkorb im Vault-Stamm: Gelöschtes landet hier (wiederherstellbar), nicht im Suchindex
     recycle_folder: str = "RecycleBin"
 
@@ -111,6 +112,7 @@ class Config:
             soft_kb=data.get("limits", {}).get("soft_kb", 20),
             hard_kb=data.get("limits", {}).get("hard_kb", 50),
             folder_notes=data.get("limits", {}).get("folder_notes", 25),
+            max_upload_mb=data.get("limits", {}).get("max_upload_mb", 25),
             host=server.get("host", "0.0.0.0"),
             port=server.get("port", 8100),
             tokens={v: k for k, v in server.get("tokens", {}).items()},

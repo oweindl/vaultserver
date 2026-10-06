@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import contextvars
+import mimetypes
 from typing import Any, Literal
 
-from mcp.server.mcpserver import Context, MCPServer
+from mcp.server.mcpserver import Context, Image, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 
@@ -328,6 +331,50 @@ def build_mcp(svc: Service) -> MCPServer:
             if not entry or not sc.inside(entry["original"]):
                 raise KeyError(f"Papierkorb-Eintrag nicht gefunden: {id}")
             return sc.rel(st.restore(id, agent_from(ctx, svc)))
+        return _guard(run)()
+
+    @mcp.tool(annotations=RW)
+    def upload(path: str, data_base64: str, overwrite: bool = False, message: str | None = None,
+               ctx: Context | None = None) -> dict[str, Any]:
+        """Datei hochladen – auch Bilder und andere Binärdateien (Inhalt als Base64). Gibt es den Namen schon,
+        wird ohne overwrite ein freier Name gewählt („bild (2).png“); das Ergebnis nennt den tatsächlichen Pfad.
+        In Notizen einbinden mit ![[Pfad]]. Bilder neben der Notiz im Unterordner „Bilder“ ablegen."""
+        sc = scope_of(ctx)
+
+        def run():
+            try:
+                data = base64.b64decode(data_base64, validate=True)
+            except (binascii.Error, ValueError):
+                raise ValueError("data_base64 ist kein gültiges Base64")
+            res = st.upload(sc.full(path), data, agent_from(ctx, svc), message=message, overwrite=overwrite)
+            out = sc.rel(res)
+            out["embed"] = f"![[{res['path']}]]"   # Link im Notiztext: voller Vault-Pfad, überall eindeutig
+            return out
+        return _guard(run)()
+
+    @mcp.tool(annotations=RO)
+    def read_file(path: str, ctx: Context | None = None) -> Any:
+        """Anhang lesen. Bilder (png, jpg, gif, webp) kommen als Bild zurück, das du ansehen kannst;
+        andere Dateien bis 2 MB als Base64. Für Notizen (.md) read verwenden."""
+        sc = scope_of(ctx)
+
+        def run():
+            full = sc.full(path)
+            f = st._abs(full)
+            if not f.is_file():
+                raise KeyError(f"Datei nicht gefunden: {path}")
+            if full.lower().endswith(".md"):
+                raise ValueError("Notizen mit read lesen")
+            mime = mimetypes.guess_type(full)[0] or "application/octet-stream"
+            size = f.stat().st_size
+            info = {"path": sc.rel(full), "type": mime, "size": size}
+            if mime in ("image/png", "image/jpeg", "image/gif", "image/webp"):
+                if size > 5 * 1024 * 1024:
+                    return {**info, "hinweis": "Bild größer als 5 MB – nicht übertragen"}
+                return [Image(data=f.read_bytes(), format=mime.split("/")[1]), info]
+            if size > 2 * 1024 * 1024:
+                return {**info, "hinweis": "Datei größer als 2 MB – nicht übertragen"}
+            return {**info, "data_base64": base64.b64encode(f.read_bytes()).decode()}
         return _guard(run)()
 
     @mcp.tool(annotations=RW)
