@@ -11,13 +11,18 @@ from mcp.types import ToolAnnotations
 
 from .scope import SCOPE_HEADER, Scope
 from .service import Service
+from . import sizes
+from .optimize import Optimizer
+from .scope import limits_for
 from .store import Conflict, Rejected
 
 INSTRUCTIONS = """VaultServer: Markdown-Vault (Projekte, Fixliste, Features, Status) mit Suchindex.
 Zu Beginn jeder Sitzung `guide` aufrufen (mit area, wenn du in einem Bereich arbeitest).
 Erst search/query/outline, dann read mit section – keine großen Dateien komplett lesen.
 Schreibende Werkzeuge brauchen die zuletzt gelesene version als base_version.
-Über /mcp/<projekt> sieht man nur dieses Projekt; alle Pfade sind dann relativ zum Projektordner."""
+Über /mcp/<projekt> sieht man nur dieses Projekt; alle Pfade sind dann relativ zum Projektordner.
+Notizen klein halten (Grenzen in guide, Standard 20 KB): große Themen als Ordner mit Unterseiten anlegen
+(`Thema.md` = kurze Übersicht, Teile in `Thema/`); zu große Notizen mit `optimize` aufteilen."""
 
 RO = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
 RW = ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False)
@@ -89,11 +94,25 @@ def build_mcp(svc: Service) -> MCPServer:
         def run():
             area_in(sc, area)
             out = svc.guide(area)
+            projects = svc.projects()
             if not sc:
+                out["groesse"] = {"weich_kb": svc.config.soft_kb, "hart_kb": svc.config.hard_kb,
+                                  "notizen_je_ordner": svc.config.folder_notes, "konvention": sizes.CONVENTION,
+                                  "abweichend": {p.name: {"weich_kb": p.soft_kb, "hart_kb": p.hard_kb, "notizen_je_ordner": p.folder_notes}
+                                                 for p in projects.values()
+                                                 if (p.soft_kb, p.hard_kb, p.folder_notes) != (svc.config.soft_kb, svc.config.hard_kb, svc.config.folder_notes)}}
                 return out
             out["areas"] = [a for a in out["areas"] if sc.inside(a["folder"])]
             out = sc.rel(out)
             pr = sc.project
+            out["groesse"] = {"weich_kb": pr.soft_kb, "hart_kb": pr.hard_kb, "notizen_je_ordner": pr.folder_notes,
+                              "konvention": sizes.CONVENTION}
+            if pr.rules:
+                try:
+                    txt = (svc.config.vault_path / pr.rules).read_text(encoding="utf-8")
+                    out["projekt_regeln"] = {"datei": sc.rel(pr.rules), "text": txt[:6000]}
+                except OSError:
+                    pass
             out["project"] = {
                 "name": pr.name, "folder": pr.folder, "start": sc.rel(pr.start) if pr.start else None,
                 "hinweis": (f"Du arbeitest im Projekt „{pr.folder}“. Alle Pfade sind relativ zu diesem Ordner, "
@@ -233,10 +252,19 @@ def build_mcp(svc: Service) -> MCPServer:
     @mcp.tool(annotations=RW)
     def write(path: str, content: str, base_version: str | None = None, message: str | None = None,
               ctx: Context | None = None) -> dict[str, Any]:
-        """Notiz anlegen (ohne base_version) oder komplett ersetzen (mit base_version aus read)."""
+        """Notiz anlegen (ohne base_version) oder komplett ersetzen (mit base_version aus read).
+        Notizen klein halten: über der Größengrenze (guide) kommt ein Hinweis mit Aufteilungsvorschlag,
+        zu große NEUE Notizen werden abgelehnt – dann gleich als Ordner mit Unterseiten anlegen."""
         sc = scope_of(ctx)
-        return _guard(lambda: sc.rel(st.write(sc.full(path), content, agent_from(ctx, svc),
-                                              base_version=base_version, message=message)))()
+
+        def run():
+            full = st._norm_path(sc.full(path))
+            if not (svc.config.vault_path / full).exists():
+                sizes.check_new_note(st, full, content)
+            res = st.write(full, content, agent_from(ctx, svc), base_version=base_version, message=message)
+            res.update(sizes.hints(st, full))
+            return sc.rel(res)
+        return _guard(run)()
 
     @mcp.tool(annotations=RW)
     def patch_section(path: str, content: str, base_version: str, section: str | None = None,
@@ -245,10 +273,18 @@ def build_mcp(svc: Service) -> MCPServer:
         """Abschnitt ändern. replace: Abschnitt inkl. Unterabschnitte ersetzen (ohne Überschrift im
         content bleibt die alte). append/prepend: Text ans Ende/an den Anfang. insert_after: neuer
         Abschnitt (content beginnt mit Überschrift) nach section, ohne section ans Notizende.
-        Konflikt nur, wenn sich genau dieser Abschnitt seit base_version geändert hat."""
+        Konflikt nur, wenn sich genau dieser Abschnitt seit base_version geändert hat.
+        Wächst die Notiz über die Größengrenze (guide), enthält das Ergebnis einen Aufteilungsvorschlag."""
         sc = scope_of(ctx)
-        return _guard(lambda: sc.rel(st.patch_section(sc.full(path), section, content, agent_from(ctx, svc),
-                                                      base_version=base_version, mode=mode, message=message)))()
+
+        def run():
+            full = st._norm_path(sc.full(path))
+            res = st.patch_section(full, section, content, agent_from(ctx, svc),
+                                   base_version=base_version, mode=mode, message=message)
+            if isinstance(res, dict) and res.get("version"):
+                res.update(sizes.hints(st, full))
+            return sc.rel(res)
+        return _guard(run)()
 
     @mcp.tool(annotations=RW)
     def set_property(path: str, key: str, value: str, base_version: str | None = None,
@@ -299,6 +335,37 @@ def build_mcp(svc: Service) -> MCPServer:
         """Leeren Ordner anlegen (bleibt über eine .gitkeep-Datei in Git erhalten)."""
         sc = scope_of(ctx)
         return _guard(lambda: sc.rel(st.mkdir(sc.full(path), agent_from(ctx, svc))))()
+
+    @mcp.tool(annotations=RW)
+    def optimize(path: str, apply: bool = False, version: str | None = None, level: int | None = None,
+                 description: str | None = None, ctx: Context | None = None) -> dict[str, Any]:
+        """Große Notiz in Unterseiten aufteilen (wie „Optimieren“ in der Web-Oberfläche).
+        Ohne apply: Plan zeigen – Ordner, Teile mit Titel und Größe, Vollständigkeitsprüfung, betroffene Links,
+        version. Mit apply=true und version aus dem Plan: ausführen. Ergebnis: `Name.md` wird zur Übersicht mit
+        Inhaltsverzeichnis, Teile in `Name/00 Einleitung.md`, `Name/01 …md`; Abschnitts-Links werden umgeschrieben,
+        das Original geht in den Papierkorb. level = Überschriften-Ebene (2 = ##), sonst automatisch."""
+        sc = scope_of(ctx)
+
+        def run():
+            full = st._norm_path(sc.full(path))
+            opt = Optimizer(st)
+            if apply:
+                if not version:
+                    raise ValueError("Zum Ausführen die version aus dem Plan mitgeben")
+                return sc.rel(opt.apply(full, agent_from(ctx, svc), version, level, description))
+            with lock:
+                p = opt.plan(full, level, description)
+            return sc.rel({
+                "path": p["path"], "version": p["version"], "level": p["level"], "levels": p["levels"],
+                "folder": p["folder"], "description": p["description"],
+                "parts": [{"path": x["path"], "title": x["title"], "kb": round(len(x["content"].encode()) / 1024, 1),
+                           "lines": x["lines"]} for x in p["parts"]],
+                "check": {k: p["check"][k] for k in ("ok", "total", "covered", "missing", "extra")},
+                "links": p["links"], "blocking": p["blocking"],
+                "next": "optimize(path, apply=true, version=…) ausführen" if p["check"]["ok"] and not p["blocking"]
+                        else "nicht ausführbar – siehe check/blocking",
+            })
+        return _guard(run)()
 
     @mcp.tool(annotations=RW)
     def create_from_template(area: str, title: str, fields: dict[str, Any], summary: str = "",

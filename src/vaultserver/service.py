@@ -43,6 +43,11 @@ GENERAL_RULES = """\
 8. **Archiv** ist in Suche und Abfragen ausgeblendet; nur bei Bedarf `include_archive=true`.
    **Löschen** (`delete`) schiebt Notizen, Anhänge und Ordner in den Papierkorb `RecycleBin`; `recycle_bin` zeigt ihn,
    `restore` holt einen Eintrag an die alte Stelle zurück. Neue leere Ordner mit `create_folder`.
+10. **Notizen klein halten.** Grenzen stehen unter `groesse` (Standard: weich 20 KB, hart 50 KB für neue Notizen,
+   25 Notizen je Ordner). Große Themen gleich als Ordner mit Unterseiten anlegen: `Thema.md` als kurze Übersicht
+   mit Inhaltsverzeichnis, Teile in `Thema/01 …md`. Meldet `write`/`patch_section` einen Größen-Hinweis, die Notiz
+   mit `optimize` aufteilen (Plan prüfen, dann `apply`). Ordner mit vielen Notizen in Unterordner gliedern.
+   Projektspezifische Regeln stehen unter `projekt_regeln` (Notiz `_Regeln.md` im Projektordner).
 9. Jede Änderung wird ein Git-Commit mit deinem Rechnernamen; `message` kurz und mit Nummer (z. B.
    `FIX-054 Status erledigt (Test)`).
 """

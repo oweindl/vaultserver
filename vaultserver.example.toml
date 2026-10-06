@@ -95,3 +95,16 @@ commit_regex = "\\bFeature (\\d+)\\b"
 overview_columns = ["Status"]
 [areas.allowed]
 status = ["offen", "in arbeit", "teilweise (test)", "erledigt (test)", "abgenommen", "produktiv", "blockiert", "geplant"]
+
+# Größenregeln (Standardwerte). Weiche Grenze: Hinweis mit Aufteilungsvorschlag beim Schreiben, Meldung in lint.
+# Harte Grenze: neue Notizen darüber werden abgelehnt. folder_notes: Hinweis auf Unterordner.
+[limits]
+soft_kb = 20
+hard_kb = 50
+folder_notes = 25
+
+# Projekte (optional; ohne Angabe ist jeder Stammordner ein Projekt). Je Projekt eigene Grenzen und eine
+# Regel-Notiz (Standard: _Regeln.md im Projektordner), deren Inhalt guide mitliefert.
+# [projects]
+# moon = { folder = "Moon", soft_kb = 30, folder_notes = 40 }
+# cmt = { folder = "ContentManagementTool", start = "Projektbeschreibung.md", rules = "_Regeln.md" }

@@ -137,8 +137,8 @@ function renderTree() {
       const name = f.path.split("/").pop();
       row.className = "node " + (f.kind === "note" ? "note" : "att");
       row.dataset.path = f.path; row.draggable = true;
-      row.title = f.kind === "note" ? `${f.title}\n${kb(f.size)} · ${fmtDate(f.mtime)}` : `${f.type} · ${kb(f.size)}`;
-      row.innerHTML = `<span class="tw"></span><span class="ic">${f.kind === "note" ? "📄" : "📎"}</span><span>${esc(f.kind === "note" ? name.replace(/\.md$/, "") : name)}</span>`;
+      row.title = f.kind === "note" ? `${f.title}\n${kb(f.size)} · ${fmtDate(f.mtime)}${f.big ? `\nGrößer als ${f.big} KB – Rechtsklick › Optimieren` : ""}` : `${f.type} · ${kb(f.size)}`;
+      row.innerHTML = `<span class="tw"></span><span class="ic">${f.kind === "note" ? "📄" : "📎"}</span><span>${esc(f.kind === "note" ? name.replace(/\.md$/, "") : name)}</span>${f.big ? `<span class="big" title="Größer als ${f.big} KB – aufteilen">⚠</span>` : ""}`;
       row.onclick = () => f.kind === "note" ? go(`#/note/${enc(f.path)}`) : openViewer(f.path);
       parent.append(row);
     });
@@ -640,7 +640,10 @@ function editNote() {
   async function save(force = false) {
     try {
       const r = await api("PUT", "/api/note", { path: n.path, text: cm.getValue(), base_version: state.base, message: $("#e-msg").value || undefined, force });
-      state.dirty = false; toast("Gespeichert"); go(`#/note/${enc(n.path)}`);
+      state.dirty = false; go(`#/note/${enc(n.path)}`);
+      if (r.groesse) toast(`Gespeichert – ${r.groesse.groesse_kb} KB, größer als ${r.groesse.grenze_kb} KB: bitte aufteilen (⋯ › Optimieren)`, 6000);
+      else if (r.ordner) toast(`Gespeichert – ${r.ordner.hinweis}`, 6000);
+      else toast("Gespeichert");
       if (r.created) loadTree();
     } catch (e) {
       if (e.status === 409) return showConflict(cm, e.data);
@@ -716,7 +719,7 @@ async function showLint() {
   state.note = null; markActive();
   $("#content").innerHTML = `<p class="empty">Prüfe …</p>`;
   const rows = (await get("/api/lint")).filter((r) => inVault(r.path));
-  const kinds = { "kaputter-link": "Kaputte Links", regel: "Regeln", "doppelte-nummer": "Doppelte Nummern", "fehlt-in-uebersicht": "Fehlt in Übersicht", claim: "Reservierungen" };
+  const kinds = { "kaputter-link": "Kaputte Links", regel: "Regeln", "doppelte-nummer": "Doppelte Nummern", "fehlt-in-uebersicht": "Fehlt in Übersicht", claim: "Reservierungen", "zu-gross": "Zu große Notizen", "ordner-voll": "Volle Ordner" };
   const by = {}; rows.forEach((r) => (by[r.kind] ??= []).push(r));
   $("#content").innerHTML = `<div class="results"><h2>Prüfung${esc(vaultLabel())}: ${rows.length} Hinweise</h2>
     <p style="display:flex;gap:8px;flex-wrap:wrap">${(state.me?.areas || []).map((a) => `<button data-ov="${esc(a)}">Übersicht ${esc(a)} erneuern</button>`).join("")}
@@ -790,7 +793,7 @@ const setupTexts = (token = "<TOKEN>", project = null) => {
       command: "npx", args: ["-y", "mcp-remote", url, "--allow-http", "--header", "Authorization:${VAULT_AUTH}"],
       env: { VAULT_AUTH: `Bearer ${token}` } } } }, null, 2),
     curl: `curl -s ${url} \\\n  -H "Authorization: Bearer ${token}" \\\n  -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" \\\n  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'`,
-    claudeMd: `## Vault (VaultServer)\n\nProjektwissen, Fixliste, Features und Status liegen im Vault und werden **nur über den MCP-Server \`vaultserver\`** gelesen und geändert (nicht über das Obsidian-Plugin, nicht per Dateizugriff).\n\n- Zu Beginn jeder Sitzung \`guide\` aufrufen, bei Arbeit an der Fixliste \`guide(area="Fixliste")\`.\n- Erst \`search\`/\`query\`/\`outline\`, dann \`read\` mit \`section\` – keine großen Dateien komplett lesen.\n- Schreiben mit \`base_version\` aus dem letzten \`read\`; Status mit \`set_property\`, Abschnitte mit \`patch_section\`, neue FIX/Features mit \`create_from_template\`.\n- Eigenschaften enthalten nur kanonische Werte (siehe \`guide\`); Details (Commit, Branch, Test) gehören in „Umsetzung“.\n- Vor längerer Arbeit an einem Eintrag \`claim\`, danach \`release\`. Nachtläufe beginnen mit \`changes_since\`.\n`,
+    claudeMd: `## Vault (VaultServer)\n\nProjektwissen, Fixliste, Features und Status liegen im Vault und werden **nur über den MCP-Server \`vaultserver\`** gelesen und geändert (nicht über das Obsidian-Plugin, nicht per Dateizugriff).\n\n- Zu Beginn jeder Sitzung \`guide\` aufrufen, bei Arbeit an der Fixliste \`guide(area="Fixliste")\`.\n- Erst \`search\`/\`query\`/\`outline\`, dann \`read\` mit \`section\` – keine großen Dateien komplett lesen.\n- Schreiben mit \`base_version\` aus dem letzten \`read\`; Status mit \`set_property\`, Abschnitte mit \`patch_section\`, neue FIX/Features mit \`create_from_template\`.\n- Eigenschaften enthalten nur kanonische Werte (siehe \`guide\`); Details (Commit, Branch, Test) gehören in „Umsetzung“.\n- Vor längerer Arbeit an einem Eintrag \`claim\`, danach \`release\`. Nachtläufe beginnen mit \`changes_since\`.\n- Notizen klein halten (Grenzen in \`guide\` › \`groesse\`): große Themen als Ordner mit Unterseiten (\`Thema.md\` = Übersicht, Teile in \`Thema/\`); bei Größen-Hinweis mit \`optimize\` aufteilen.\n`,
   };
 };
 // .mcp.json für ein Code-Repo: Projekt-Adresse, Token aus der Umgebung (die Datei darf ins Repo)

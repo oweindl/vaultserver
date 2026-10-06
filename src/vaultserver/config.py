@@ -46,6 +46,11 @@ class Config:
     status_note: str = ""               # Idee 5: Notiz mit automatischem Statusblock
     # Projekt-Kontexte: Name -> Ordner oder {folder, start}; leer = Ordner der obersten Ebene
     projects: dict = field(default_factory=dict)
+    # Größe: weiche Grenze (Hinweis + Aufteilungsvorschlag), harte Grenze (neue Notizen abgelehnt),
+    # Notizen je Ordner (Hinweis auf Unterordner); je Projekt in [projects] überschreibbar
+    soft_kb: int = 20
+    hard_kb: int = 50
+    folder_notes: int = 25
     # Papierkorb im Vault-Stamm: Gelöschtes landet hier (wiederherstellbar), nicht im Suchindex
     recycle_folder: str = "RecycleBin"
 
@@ -103,6 +108,9 @@ class Config:
             status_note=data.get("status_note", ""),
             projects=data.get("projects", {}),
             recycle_folder=data.get("recycle_folder", "RecycleBin"),
+            soft_kb=data.get("limits", {}).get("soft_kb", 20),
+            hard_kb=data.get("limits", {}).get("hard_kb", 50),
+            folder_notes=data.get("limits", {}).get("folder_notes", 25),
             host=server.get("host", "0.0.0.0"),
             port=server.get("port", 8100),
             tokens={v: k for k, v in server.get("tokens", {}).items()},

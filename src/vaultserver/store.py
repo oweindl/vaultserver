@@ -1007,7 +1007,34 @@ class Store:
                             if p not in linked:
                                 out.append({"path": p, "line": None, "kind": "fehlt-in-uebersicht",
                                             "message": f"Nicht in {area.overview} verlinkt"})
+            if not area_name:
+                out += self._lint_sizes(archived)
             return out
+
+    def _lint_sizes(self, archived) -> list[dict]:
+        """Zu große Notizen (weiche Grenze) und zu volle Ordner – Grenzen je Projekt."""
+        from .scope import limits_for, load_projects
+        projects = load_projects(self.config)
+        out, per_folder = [], {}
+        for r in self.index.db.execute("SELECT path, size FROM notes ORDER BY size DESC"):
+            p = r["path"]
+            if archived(p) or self.config.area_for(p):   # Bereichseinträge bleiben eine Datei je Eintrag
+                continue
+            lim = limits_for(self.config, p, projects)
+            kb = (r["size"] or 0) / 1024
+            if kb > lim.soft_kb:
+                out.append({"path": p, "line": None, "kind": "zu-gross",
+                            "message": f"{kb:.0f} KB (Grenze {lim.soft_kb} KB) – in Unterseiten aufteilen (Optimieren)"})
+            folder = str(PurePosixPath(p).parent)
+            if folder not in ("", "."):
+                per_folder[folder] = per_folder.get(folder, 0) + 1
+        area_folders = {a.folder.rstrip("/") for a in self.config.areas}   # nummerierte Einträge: flach gewollt
+        for folder, n in sorted(per_folder.items()):
+            lim = limits_for(self.config, folder + "/x.md", projects)
+            if n > lim.folder_notes and not archived(folder + "/x.md") and folder not in area_folders:
+                out.append({"path": folder, "line": None, "kind": "ordner-voll",
+                            "message": f"{n} Notizen (Grenze {lim.folder_notes}) – thematische Unterordner bilden"})
+        return out
 
     # ------------------------------------------------------------ Änderungen (Idee 4)
 

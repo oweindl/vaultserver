@@ -14,6 +14,28 @@ Die Markdown-Dateien im Git-Repo bleiben die Quelle der Wahrheit. Ein SQLite-FTS
 | `http://<host>:8100/mcp` | MCP-Server (Streamable HTTP, Bearer-Token je Rechner) |
 | `http://<host>:8100/api/…` | REST für die Web-Oberfläche |
 
+### Größenregeln: Notizen klein halten
+
+Große Notizen machen das Lesen teuer, und parallel arbeitende Agenten kommen sich häufiger in die Quere. Deshalb gelten Grenzen:
+
+| Grenze | Standard | Wirkung |
+| --- | --- | --- |
+| weich | 20 KB | Hinweis mit Aufteilungsvorschlag |
+| hart | 50 KB | nur für neue Notizen: abgelehnt, mit Vorschlag |
+| Notizen je Ordner | 25 | Hinweis, Unterordner zu bilden |
+
+Die Grenzen sind einstellbar unter `[limits]` und je Projekt unter `[projects]`.
+
+So erfahren es die MCP-Clients:
+1. **Server-Anweisungen** beim Verbinden und Regel 10 in `guide`.
+2. `guide` liefert `groesse` mit den Grenzen und der Konvention: `Thema.md` als Übersicht, Teile in `Thema/`. Dazu `projekt_regeln`, den Inhalt von `_Regeln.md` im Projektordner, falls vorhanden.
+3. **Beschreibungen** von `write` und `patch_section`.
+4. **Rückmeldung beim Schreiben:** Über der weichen Grenze steht im Ergebnis `groesse` mit Vorschlag (Ebene, Teile, Titel), bei vollem Ordner `ordner`. Neue Notizen über der harten Grenze werden abgelehnt.
+5. **Werkzeug `optimize`:** erst den Plan zeigen, dann mit `apply=true` und `version` ausführen. Es arbeitet mit derselben Logik und Prüfung wie „Optimieren“ im Web.
+6. **`lint`** meldet `zu-gross` und `ordner-voll`. Archiv und Bereichsordner wie die Fixliste sind ausgenommen.
+
+Im Web zeigt der Baum ⚠ an zu großen Notizen, und beim Speichern erscheint ein Hinweis.
+
 ### Live-Aktualisierung
 
 Der Dienst gleicht den Index ständig mit den Dateien ab:

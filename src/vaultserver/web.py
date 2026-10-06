@@ -24,7 +24,9 @@ from .config import Config
 from .index import Index
 from .mcp_server import build_mcp
 from .render import render
+from . import sizes
 from .optimize import Optimizer
+from .scope import limits_for, load_projects
 from .scope import SCOPE_HEADER
 from .service import Service
 from .store import Conflict, Rejected
@@ -336,6 +338,11 @@ def create_app(config: Config, start_background: bool = True) -> FastAPI:
             rel = Path(dirpath).relative_to(vault).as_posix()
             if rel != ".":
                 folders.append(rel)
+        projects = load_projects(config)
+        for n in notes:
+            lim = limits_for(config, n["path"], projects)
+            if (n["size"] or 0) > lim.soft_kb * 1024:
+                n["big"] = lim.soft_kb
         return {"notes": notes, "attachments": atts, "folders": folders,
                 "bin": {"folder": config.recycle_folder, "count": len(svc.store.bin_list())}}
 
@@ -437,9 +444,14 @@ def create_app(config: Config, start_background: bool = True) -> FastAPI:
     @app.put("/api/note")
     def put_note(request: Request, data: dict = Body(...)):
         try:
-            return svc.store.write(data["path"], data["text"], agent(request),
-                                   base_version=data.get("base_version"), message=data.get("message"),
-                                   force=bool(data.get("force")))
+            path = svc.store._norm_path(data["path"])
+            if not (config.vault_path / path).exists():
+                sizes.check_new_note(svc.store, path, data["text"])
+            res = svc.store.write(path, data["text"], agent(request),
+                                  base_version=data.get("base_version"), message=data.get("message"),
+                                  force=bool(data.get("force")))
+            res.update(sizes.hints(svc.store, path))
+            return res
         except Exception as e:
             return err(e)
 

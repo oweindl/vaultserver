@@ -92,9 +92,12 @@ class Optimizer:
 
     # ------------------------------------------------------------ Analyse
 
-    def plan(self, path: str, level: int | None = None, description: str | None = None) -> dict:
+    def plan(self, path: str, level: int | None = None, description: str | None = None,
+             text: str | None = None) -> dict:
+        """Aufteilung planen. Mit text: für einen (noch nicht gespeicherten) Text, ohne Links anderer Notizen."""
         st = self.store
         path = st._norm_path(path)
+        given = text
         if not path.endswith(".md"):
             raise Rejected("Nur Notizen (.md) lassen sich optimieren")
         if st._in_bin(path):
@@ -102,9 +105,12 @@ class Optimizer:
         area = self.config.area_for(path)
         if area:
             raise Rejected(f"Einträge im Bereich „{area.name}“ bleiben eine Datei (Bereichsregeln) – nicht aufteilbar")
-        text, version = st.current(path)
-        if text is None:
-            raise KeyError(f"Notiz nicht gefunden: {path}")
+        if given is None:
+            text, version = st.current(path)
+            if text is None:
+                raise KeyError(f"Notiz nicht gefunden: {path}")
+        else:
+            version = None
         lines = text.split("\n")
         _, body = _split_frontmatter(lines)
         hs = _headings(lines, body)
@@ -244,7 +250,7 @@ class Optimizer:
         covered = sum(b.size for b in sm.get_matching_blocks())
 
         # Links aus anderen Notizen auf Abschnitte
-        other = self._other_links(path, target_for)
+        other = self._other_links(path, target_for) if given is None else {}
 
         blocking = []
         if (self.config.vault_path / folder).exists():

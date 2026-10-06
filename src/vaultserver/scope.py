@@ -30,11 +30,34 @@ def slug(name: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", s).strip("-")
 
 
+RULES_NOTE = "_Regeln.md"   # optionale Regel-Notiz je Projekt, Inhalt kommt mit guide
+
+
 @dataclass(frozen=True)
 class Project:
     name: str      # in der URL, z. B. finance-app
     folder: str    # Ordner im Vault, z. B. Finance App
     start: str     # Einstiegsnotiz (voller Pfad) oder ""
+    soft_kb: int = 20
+    hard_kb: int = 50
+    folder_notes: int = 25
+    rules: str = ""  # Regel-Notiz (voller Pfad) oder ""
+
+
+@dataclass(frozen=True)
+class Limits:
+    soft_kb: int
+    hard_kb: int
+    folder_notes: int
+    project: str = ""
+
+
+def limits_for(config: Config, path: str, projects: dict | None = None) -> Limits:
+    """Größengrenzen für einen Pfad: die seines Projekts, sonst die allgemeinen."""
+    for p in (projects if projects is not None else load_projects(config)).values():
+        if path == p.folder or path.startswith(p.folder + "/"):
+            return Limits(p.soft_kb, p.hard_kb, p.folder_notes, p.name)
+    return Limits(config.soft_kb, config.hard_kb, config.folder_notes)
 
 
 def load_projects(config: Config) -> dict[str, Project]:
@@ -46,7 +69,8 @@ def load_projects(config: Config) -> dict[str, Project]:
                if p.is_dir() and not p.name.startswith(".") and p.name not in hidden and slug(p.name)}
     out: dict[str, Project] = {}
     for name, spec in raw.items():
-        folder, start = (spec, "") if isinstance(spec, str) else (spec.get("folder", ""), spec.get("start", ""))
+        spec = {"folder": spec} if isinstance(spec, str) else dict(spec)
+        folder, start = spec.get("folder", ""), spec.get("start", "")
         folder = folder.strip("/")
         if not folder:
             continue
@@ -57,7 +81,13 @@ def load_projects(config: Config) -> dict[str, Project]:
                     break
         elif not start.startswith(folder + "/"):
             start = f"{folder}/{start}"
-        out[slug(name) or name] = Project(slug(name) or name, folder, start)
+        rules = spec.get("rules", RULES_NOTE)
+        rules = rules if rules.startswith(folder + "/") else f"{folder}/{rules}"
+        out[slug(name) or name] = Project(
+            slug(name) or name, folder, start,
+            soft_kb=int(spec.get("soft_kb", config.soft_kb)), hard_kb=int(spec.get("hard_kb", config.hard_kb)),
+            folder_notes=int(spec.get("folder_notes", config.folder_notes)),
+            rules=rules if (vault / rules).is_file() else "")
     return out
 
 
