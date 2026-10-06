@@ -51,7 +51,7 @@ async function logout() { live.es?.close(); await api("POST", "/api/logout"); lo
 async function changePassword() {
   const r = await dialog(`Passwort ändern${state.me?.user ? ` (${state.me.user})` : ""}`, [
     { name: "old", label: "Bisheriges Passwort", type: "password", required: true, autocomplete: "current-password" },
-    { name: "new", label: "Neues Passwort (mindestens 10 Zeichen)", type: "password", required: true, autocomplete: "new-password" },
+    { name: "new", label: "Neues Passwort (mindestens 8 Zeichen)", type: "password", required: true, autocomplete: "new-password" },
     { name: "repeat", label: "Neues Passwort wiederholen", type: "password", required: true, autocomplete: "new-password" },
   ], "Ändern");
   if (!r) return;

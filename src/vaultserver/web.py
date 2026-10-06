@@ -64,7 +64,7 @@ def _secret(config: Config) -> bytes:
     return f.read_text().strip().encode()
 
 
-MIN_PASSWORD = 10
+MIN_PASSWORD = 8
 
 
 class Users:

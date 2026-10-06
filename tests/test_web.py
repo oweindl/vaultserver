@@ -28,7 +28,7 @@ def test_change_password(setup: Config):
         b = TestClient(app)  # zweiter Browser mit eigenen Cookies, gleiche laufende App
         assert login(a, "altes-passwort") == 200 and login(b, "altes-passwort") == 200
         assert a.post("/api/password", json={"old": "falsch", "new": "neues-passwort-1"}).status_code == 400
-        assert a.post("/api/password", json={"old": "altes-passwort", "new": "kurz"}).status_code == 400
+        assert a.post("/api/password", json={"old": "altes-passwort", "new": "sieben7"}).status_code == 400   # 7 Zeichen: zu kurz
         r = a.post("/api/password", json={"old": "altes-passwort", "new": "neues-passwort-1"})
         assert r.status_code == 200
         assert a.get("/api/me").json()["user"] == "oliver"      # eigene Sitzung bleibt
@@ -89,3 +89,10 @@ def test_clients_create_use_revoke(setup: Config):
     with TestClient(create_app(setup, start_background=False)) as c:
         assert c.get("/api/me", headers={"Authorization": "Bearer tok"}).status_code == 401
         assert c.get("/api/me", headers={"Authorization": f"Bearer {ren['token']}"}).status_code == 200
+
+
+def test_password_min_length_8(setup: Config):
+    with TestClient(create_app(setup, start_background=False)) as c:
+        assert login(c, "altes-passwort") == 200
+        assert c.post("/api/password", json={"old": "altes-passwort", "new": "acht8888"}).status_code == 200   # genau 8
+        assert login(c, "acht8888") == 200
