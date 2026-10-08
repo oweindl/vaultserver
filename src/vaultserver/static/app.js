@@ -925,8 +925,19 @@ async function newClient(projects) {
 const repoSlug = (url) => (url.replace(/\.git\/?$/, "").replace(/\/+$/, "").split(/[/:]/).pop() || "")
   .toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 63);
 
+function rootRow(r) {
+  if (!r) return "";
+  return `<tr><td style="word-break: break-all"><b>${esc(r.name)}</b> <span class="hp">· Vault (Stamm) · Pfade ohne Präfix</span>
+      <br><code>${esc(r.remote || (r.enabled ? "ohne Remote" : "kein Git-Repo"))}</code>
+      <br><span class="hp">MCP:</span> <code>${esc(mcpUrl())}</code> <button type="button" data-copy="${esc(mcpUrl())}">Kopieren</button></td>
+    <td><code>${esc(r.branch || "–")}</code>${r.head ? `<br><span class="hp">${esc(r.head)}</span>` : ""}</td>
+    <td>${!r.enabled ? "–" : `${gitState("Pull", r.pull)}<br>${r.push ? gitState("Push", r.push) : "Push aus"}`}</td>
+    <td class="act" style="white-space: nowrap">${r.enabled ? `<button id="btn-root-sync">Abgleichen</button>` : ""}
+      <br><span class="hp">Einstellungen in vaultserver.toml</span></td></tr>`;
+}
+
 function repoRows(repos) {
-  if (!repos.length) return `<tr><td colspan="4">Noch keine Repos eingebunden.</td></tr>`;
+  if (!repos.length) return `<tr><td colspan="4" class="hp">Noch keine weiteren Repos eingebunden.</td></tr>`;
   return repos.map((r) => `<tr><td style="word-break: break-all"><b>${esc(r.name)}</b>
       <span class="hp">· ${r.source === "config" ? "vaultserver.toml" : `Oberfläche${r.added_by ? `, ${esc(r.added_by)}` : ""}`}${r.has_token ? "" : " · ohne Token"}</span>
       <br><code>${esc(r.url)}</code>
@@ -1016,7 +1027,7 @@ async function showSetup() {
     <p>Weitere Git-Repos (z. B. je Kunde) in den Vault einbinden. Jedes Repo liegt als eigener Ordner im Vault, ist ein eigenes <b>Projekt</b> mit eigener MCP-Adresse und wird für sich geholt, committet und gepusht. Zugänge lassen sich unter 3 auf ein Repo beschränken.</p>
     <table class="list">
       <tr><th>Repository</th><th>Branch</th><th>Abgleich</th><th></th></tr>
-      ${repoRows(repos)}
+      ${rootRow(rp.root)}${repoRows(repos)}
     </table>
     <p><button class="primary" id="btn-new-repo">Repository einbinden …</button>
       <span class="hp">Erlaubt: ${rp.schemes.map((x) => `<code>${esc(x)}://</code>`).join(", ")}. Repos aus <code>[[repos]]</code> in <code>vaultserver.toml</code> erscheinen hier nur lesend.</span></p>
@@ -1088,6 +1099,12 @@ async function showSetup() {
   };
   $("#btn-new-client").onclick = () => newClient(d.projects);
   $("#btn-new-repo").onclick = () => repoDialog();
+  const rs = $("#btn-root-sync");
+  if (rs) rs.onclick = async () => {
+    rs.disabled = true; rs.textContent = "…";
+    try { await api("POST", "/api/vault/sync"); await loadTree(); } catch (e) { fail(e); }
+    showSetup();
+  };
   c.querySelectorAll("[data-repo-edit]").forEach((b) => (b.onclick = () => repoDialog(repos.find((r) => r.name === b.dataset.repoEdit))));
   c.querySelectorAll("[data-repo-sync]").forEach((b) => (b.onclick = async () => {
     b.disabled = true; b.textContent = "…";

@@ -312,7 +312,24 @@ def create_app(config: Config, start_background: bool = True) -> FastAPI:
     def repos_list(request: Request):
         if not web_user(request):
             return only_web()
-        return {"repos": repo_rows(), "schemes": config.repo_schemes}
+        g = svc.store.git.root
+        root = {"name": config.vault_path.name, "cloned": g.enabled, **git_info(config, svc)}
+        if g.enabled:
+            root["head"] = g.head()[:10]
+        return {"root": root, "repos": repo_rows(), "schemes": config.repo_schemes}
+
+    @app.post("/api/vault/sync")
+    def vault_sync(request: Request):
+        """Stamm-Vault jetzt pushen (falls etwas offen ist) und holen."""
+        if not web_user(request):
+            return only_web()
+        svc.store.dirty.add("")
+        for step in (svc.store.push, lambda: svc.store.pull(only={""})):
+            try:
+                step()
+            except Exception:  # noqa: BLE001 – steht im Status
+                pass
+        return git_info(config, svc)
 
     @app.post("/api/repos/test")
     def repos_test(request: Request, data: dict = Body(...)):

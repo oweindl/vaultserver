@@ -77,7 +77,11 @@ def test_repos_ueber_web_einbinden_und_per_mcp_anbieten(env):
     with TestClient(app) as c:
         # nur mit Web-Anmeldung, nicht mit MCP-Token
         assert c.get("/api/repos", headers={"Authorization": "Bearer tok"}).status_code == 403
+        assert c.post("/api/vault/sync", headers={"Authorization": "Bearer tok"}).status_code == 403
         login(c)
+        root = c.get("/api/repos").json()["root"]
+        assert root["name"] == "vault" and root["enabled"] and root["branch"] == "main" and root["head"]
+        assert c.post("/api/vault/sync").status_code == 200
         url = f"file://{env['acme']}"
         t = c.post("/api/repos/test", json={"url": url}).json()
         assert t["ok"] and t["branches"] == ["main"] and t["default"] == "main"
