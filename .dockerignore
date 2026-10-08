@@ -1,0 +1,10 @@
+.git
+.venv
+venv
+data
+vaultserver.toml
+.env
+**/__pycache__
+*.egg-info
+tests
+docs
