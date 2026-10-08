@@ -35,6 +35,7 @@ class Repo:
     committer: str = ""             # "Name <adresse>", leer = wie [git] committer
     push: bool = True
     pull_seconds: int = 60          # 0 = nie
+    split: bool = False             # True: jeder Ordner der obersten Ebene im Repo ist ein eigener Vault
     source: str = "web"             # "web" (data/repos.json) oder "config" (vaultserver.toml)
     token_env: str = ""             # nur config: Umgebungsvariable mit dem Token
     token_box: str = field(default="", repr=False)   # nur web: verschlüsseltes Token
@@ -80,7 +81,12 @@ class Repos:
         with self.lock:
             self._repos = repos
             self._gits = {}
-            self.config.repo_folders = sorted(repos)
+            self._publish()
+
+    def _publish(self) -> None:
+        """Ordner und Aufteilung für Projekte, Papierkörbe und Git sichtbar machen."""
+        self.config.repo_folders = sorted(self._repos)
+        self.config.repo_split = sorted(n for n, r in self._repos.items() if r.split)
 
     def _save(self) -> None:
         rows = [asdict(r) for r in self._repos.values() if r.source == "web"]
@@ -175,7 +181,8 @@ class Repos:
     # ------------------------------------------------------------ Ändern
 
     def add(self, name: str, url: str, branch: str = "", token: str = "", username: str = "x-access-token",
-            committer: str = "", push: bool = True, pull_seconds: int | None = None, agent: str = "") -> Repo:
+            committer: str = "", push: bool = True, pull_seconds: int | None = None, agent: str = "",
+            split: bool = False) -> Repo:
         """Repo klonen und einbinden. Klont in einen versteckten Ordner und benennt erst am Ende um."""
         url = self._check_url(url)
         name = self._check_name(name or default_name(url))
@@ -186,7 +193,7 @@ class Repos:
             if repo_key(r.url) == repo_key(url) and (not branch or not r.branch or r.branch == branch):
                 raise ValueError(f"Dieses Repo ist schon als „{r.name}“ eingebunden")
         repo = Repo(name=name, url=url, branch=branch, username=username or "x-access-token",
-                    committer=committer, push=bool(push),
+                    committer=committer, push=bool(push), split=bool(split),
                     pull_seconds=(self.config.git_pull_seconds or 60) if pull_seconds is None else max(0, int(pull_seconds)),
                     token_box=seal(server_secret(self.config), token) if token else "",
                     added_by=agent, added_at=time.strftime("%Y-%m-%dT%H:%M:%S"))
@@ -206,13 +213,13 @@ class Repos:
             os.replace(tmp, self.folder(name))
             self._repos[name] = repo
             self._gits.pop(name, None)
-            self.config.repo_folders = sorted(self._repos)
+            self._publish()
             self._save()
         return repo
 
     def update(self, name: str, *, token: str | None = None, branch: str | None = None,
                username: str | None = None, committer: str | None = None, push: bool | None = None,
-               pull_seconds: int | None = None) -> Repo:
+               pull_seconds: int | None = None, split: bool | None = None) -> Repo:
         with self.lock:
             repo = self.get(name)
             if repo.source != "web":
@@ -230,6 +237,9 @@ class Repos:
                 repo.push = bool(push)
             if pull_seconds is not None:
                 repo.pull_seconds = max(0, int(pull_seconds))
+            if split is not None:
+                repo.split = bool(split)
+                self._publish()
             self._gits.pop(name, None)
             if branch and branch != repo.branch:
                 g = self.git(name)
@@ -266,7 +276,7 @@ class Repos:
             del self._repos[name]
             self._gits.pop(name, None)
             self.status.pop(name, None)
-            self.config.repo_folders = sorted(self._repos)
+            self._publish()
             self._root_exclude(remove=name)
             self._save()
             return {"name": name, "removed": True, "moved_to": moved_to}

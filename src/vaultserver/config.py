@@ -76,6 +76,7 @@ class Config:
     repos: list[dict] = field(default_factory=list)          # [[repos]]: eingebundene Repos aus der toml
     repo_schemes: list[str] = field(default_factory=lambda: ["https"])   # erlaubte Adressen für Repos
     repo_folders: list[str] = field(default_factory=list)    # zur Laufzeit: Ordner der eingebundenen Repos
+    repo_split: list[str] = field(default_factory=list)      # zur Laufzeit: Repos, deren Unterordner eigene Vaults sind
     code_repos: list[dict] = field(default_factory=list)  # Idee 8: {path, name, url}
     commit_link_minutes: int = 0        # 0 = nur auf Aufruf
 

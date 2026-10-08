@@ -64,6 +64,8 @@ Neben dem Vault selbst kann der Server beliebig viele weitere Git-Repos anbieten
 - Entfernen verschiebt den Ordner nach `data/removed-repos/<name>-<Zeit>` (nichts geht verloren). Gibt es nicht gepushte Commits oder Änderungen, fragt die Oberfläche nach.
 - Ein eingebundener Ordner lässt sich nicht löschen oder verschieben (nur über die Einrichtung).
 
+**Unterordner als eigene Vaults** (Häkchen im Dialog, in der toml `split = true`): Standard ist ein Vault je Repo (`/mcp/<name>`). Mit Aufteilung ist zusätzlich jeder Ordner der obersten Ebene im Repo ein eigener Vault `/mcp/<name>/<ordner>` – eigene Auswahl in der Oberfläche, relative Pfade, Zugänge lassen sich auf genau einen Unter-Vault beschränken, optionale `_Regeln.md` je Unterordner. So wie die Ordner im Stamm-Vault. `/mcp/<name>` bleibt als Adresse für das ganze Repo. Neue Ordner (auch per Pull) werden sofort zu Vaults. Git bleibt ein Repo (ein Klon, gemeinsame Commits, Pull/Push und Papierkorb).
+
 **Fest in der Konfiguration** (nur lesbar in der Oberfläche; Ordner fehlt oder ist leer → wird beim Start geklont):
 
 ```toml
@@ -74,6 +76,7 @@ branch = "main"
 committer = "VaultServer <vaultserver@acme.example>"
 push = true
 pull_seconds = 60
+split = false                       # true: jeder Ordner der obersten Ebene ist ein eigener Vault /mcp/acme/<ordner>
 # Token aus der Umgebung, Standard VS_GIT_TOKEN_<NAME> (hier VS_GIT_TOKEN_ACME); anderer Name: token_env = "…"
 ```
 

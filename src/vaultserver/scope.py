@@ -53,10 +53,13 @@ class Limits:
 
 
 def limits_for(config: Config, path: str, projects: dict | None = None) -> Limits:
-    """Größengrenzen für einen Pfad: die seines Projekts, sonst die allgemeinen."""
+    """Größengrenzen für einen Pfad: die seines Projekts (das innerste, z. B. ein Unter-Vault), sonst die allgemeinen."""
+    best = None
     for p in (projects if projects is not None else load_projects(config)).values():
-        if path == p.folder or path.startswith(p.folder + "/"):
-            return Limits(p.soft_kb, p.hard_kb, p.folder_notes, p.name)
+        if (path == p.folder or path.startswith(p.folder + "/")) and (best is None or len(p.folder) > len(best.folder)):
+            best = p
+    if best:
+        return Limits(best.soft_kb, best.hard_kb, best.folder_notes, best.name)
     return Limits(config.soft_kb, config.hard_kb, config.folder_notes)
 
 
@@ -73,7 +76,15 @@ def load_projects(config: Config) -> dict[str, Project]:
         if folder not in covered and (vault / folder).is_dir():
             raw[folder] = folder
     out: dict[str, Project] = {}
-    for name, spec in raw.items():
+    # Repos mit Aufteilung: jeder Ordner der obersten Ebene im Repo ist ein eigener Vault <repo>/<ordner>
+    hidden_names = set(config.exclude) | set(config.archive_folders) | {config.recycle_folder}
+    nested: dict[str, dict] = {}
+    for repo in config.repo_split:
+        base = vault / repo
+        for d in sorted(base.iterdir()) if base.is_dir() else []:
+            if d.is_dir() and not d.name.startswith(".") and d.name not in hidden_names and slug(d.name):
+                nested[f"{repo}/{slug(d.name)}"] = {"folder": f"{repo}/{d.name}"}
+    for name, spec in [*raw.items(), *nested.items()]:
         spec = {"folder": spec} if isinstance(spec, str) else dict(spec)
         folder, start = spec.get("folder", ""), spec.get("start", "")
         folder = folder.strip("/")
@@ -88,8 +99,9 @@ def load_projects(config: Config) -> dict[str, Project]:
             start = f"{folder}/{start}"
         rules = spec.get("rules", RULES_NOTE)
         rules = rules if rules.startswith(folder + "/") else f"{folder}/{rules}"
-        out[slug(name) or name] = Project(
-            slug(name) or name, folder, start,
+        key = name if name in nested else (slug(name) or name)
+        out[key] = Project(
+            key, folder, start,
             soft_kb=int(spec.get("soft_kb", config.soft_kb)), hard_kb=int(spec.get("hard_kb", config.hard_kb)),
             folder_notes=int(spec.get("folder_notes", config.folder_notes)),
             rules=rules if (vault / rules).is_file() else "")

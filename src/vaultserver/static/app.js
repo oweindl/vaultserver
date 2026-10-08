@@ -941,7 +941,9 @@ function repoRows(repos) {
   return repos.map((r) => `<tr><td style="word-break: break-all"><b>${esc(r.name)}</b>
       <span class="hp">· ${r.source === "config" ? "vaultserver.toml" : `Oberfläche${r.added_by ? `, ${esc(r.added_by)}` : ""}`}${r.has_token ? "" : " · ohne Token"}</span>
       <br><code>${esc(r.url)}</code>
-      <br><span class="hp">MCP:</span> <code>${esc(mcpUrl(r.name))}</code> <button type="button" data-copy="${esc(mcpUrl(r.name))}">Kopieren</button></td>
+      <br><span class="hp">MCP${r.split ? " (ganzes Repo)" : ""}:</span> <code>${esc(mcpUrl(r.name))}</code> <button type="button" data-copy="${esc(mcpUrl(r.name))}">Kopieren</button>
+      ${r.split ? `<br><span class="hp">Unterordner als eigene Vaults (${(r.vaults || []).length}):</span>${(r.vaults || []).map((v) =>
+        `<br>· <code>${esc(mcpUrl(v))}</code> <button type="button" data-copy="${esc(mcpUrl(v))}">Kopieren</button>`).join("") || " noch keine Ordner"}` : ""}</td>
     <td><code>${esc(r.current_branch || r.branch || "–")}</code>${r.head ? `<br><span class="hp">${esc(r.head)}</span>` : ""}</td>
     <td>${r.error ? `<span style="color: var(--warn)">${esc(r.error)}</span>` : !r.cloned ? "nicht geklont"
       : `${gitState("Pull", r.pull)}<br>${r.push ? gitState("Push", r.push) : "Push aus"}`}</td>
@@ -965,6 +967,8 @@ function repoDialog(existing = null) {
     <div class="row"><label for="r-committer">Commit-Kennung (Name &lt;adresse&gt;)</label><input type="text" id="r-committer" value="${esc(e.committer || "")}" placeholder="VaultServer &lt;vaultserver@kunde.example&gt;"></div>
     <div class="row"><label for="r-pull">Holen alle … Sekunden (0 = nie)</label><input type="text" id="r-pull" value="${esc(String(e.pull_seconds ?? 60))}"></div>
     <div class="row"><label><input type="checkbox" id="r-push" ${e.push === false ? "" : "checked"}> Änderungen pushen</label></div>
+    <div class="row"><label><input type="checkbox" id="r-split" ${e.split ? "checked" : ""}> Unterordner als eigene Vaults</label></div>
+    <p class="hp">Aus: das Repo ist ein Vault (<code>/mcp/name</code>). An: jeder Ordner der obersten Ebene im Repo ist ein eigener Vault (<code>/mcp/name/ordner</code>) mit eigener Auswahl und eigenen Zugängen, wie bei den Ordnern im Stamm-Vault. Git bleibt ein Repo.</p>
     <div class="btns"><button value="cancel" formnovalidate>Abbrechen</button><button type="button" class="primary" id="r-ok">${edit ? "Speichern" : "Klonen und einbinden"}</button></div>`;
   const msg = (t, bad = false) => { const m = $("#r-msg"); m.textContent = t; m.style.color = bad ? "var(--warn)" : ""; };
   const url = $("#r-url"), name = $("#r-name");
@@ -983,7 +987,7 @@ function repoDialog(existing = null) {
   };
   $("#r-ok").onclick = async () => {
     const body = { username: $("#r-user").value.trim(), committer: $("#r-committer").value.trim(),
-      push: $("#r-push").checked, pull_seconds: parseInt($("#r-pull").value, 10) || 0, branch: $("#r-branch").value };
+      push: $("#r-push").checked, split: $("#r-split").checked, pull_seconds: parseInt($("#r-pull").value, 10) || 0, branch: $("#r-branch").value };
     const tok = $("#r-token").value;
     if (tok) body.token = tok;
     $("#r-ok").disabled = true; msg(edit ? "speichere …" : "klone … (kann bei großen Repos dauern)");

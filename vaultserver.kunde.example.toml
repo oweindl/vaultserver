@@ -45,5 +45,6 @@ max_upload_mb = 25
 # name = "acme"
 # url = "https://github.com/acme/vault.git"
 # branch = "main"
+# split = false            # true: jeder Ordner der obersten Ebene im Repo ist ein eigener Vault
 # push = true
 # Token aus der Umgebung VS_GIT_TOKEN_ACME (in .env und compose.yaml unter environment ergänzen)

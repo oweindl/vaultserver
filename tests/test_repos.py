@@ -233,3 +233,48 @@ def test_branch_wechseln_und_token_aendern(env):
         (env["vault"] / "acme" / "Lose.md").write_text("x", encoding="utf-8")
         r = c.put("/api/repos/acme", json={"branch": "main"})
         assert r.status_code == 400 and "nicht committete" in r.json()["error"]
+
+
+def test_unterordner_als_eigene_vaults(env):
+    split = bare_repo(env["tmp"], "split", {"Buchhaltung/Start.md": "# Buchhaltung\n\nKonto Kasse\n",
+                                             "Technik/Server.md": "# Server\n\nKonto Admin\n",
+                                             "Wurzel.md": "# Wurzel\n\nKonto Wurzel\n"})
+    app = create_app(env["cfg"], start_background=False)
+    with TestClient(app) as c:
+        login(c)
+        r = c.post("/api/repos", json={"url": f"file://{split}", "name": "kunde", "split": True})
+        assert r.status_code == 200, r.text
+        assert r.json()["split"] and r.json()["vaults"] == ["kunde/buchhaltung", "kunde/technik"]
+        projects = {p["name"]: p for p in c.get("/api/setup").json()["projects"]}
+        assert projects["kunde/technik"]["in_repo"] == "kunde" and projects["kunde/technik"]["folder"] == "kunde/Technik"
+        assert "kunde/recyclebin" not in projects
+        # Unter-Vault: nur sein Ordner, relative Pfade
+        _, hits = call(c, "search", {"text": "Konto"}, url="/mcp/kunde/technik")
+        assert [h["path"] for h in hits] == ["Server.md"]
+        # ganzes Repo bleibt erreichbar
+        _, hits = call(c, "search", {"text": "Konto"}, url="/mcp/kunde")
+        assert {h["path"] for h in hits} == {"Buchhaltung/Start.md", "Technik/Server.md", "Wurzel.md"}
+        # Schreiben im Unter-Vault landet im Repo-Ordner und wird im Repo committet
+        assert call(c, "write", {"path": "Neu.md", "content": "# Neu\n"}, url="/mcp/kunde/technik")[0] == 200
+        assert git(env["vault"] / "kunde", "log", "-1", "--name-only", "--format=").strip() == "Technik/Neu.md"
+        # Zugang nur für einen Unter-Vault
+        tok = c.post("/api/clients", json={"name": "buchhalter", "project": "kunde/buchhaltung"}).json()["token"]
+        t = TestClient(app)
+        assert call(t, "guide", url="/mcp/kunde/buchhaltung", token=tok)[0] == 200
+        assert call(t, "guide", url="/mcp/kunde/technik", token=tok)[0] == 403
+        _, hits = call(t, "search", {"text": "Konto"}, url="/mcp", token=tok)
+        assert [h["path"] for h in hits] == ["Start.md"]
+        # neuer Ordner per Pull -> neuer Vault
+        other = env["tmp"] / "split-andere"
+        git(env["tmp"], "clone", "-q", str(split), str(other))
+        (other / "Vertrieb").mkdir()
+        (other / "Vertrieb" / "Liste.md").write_text("# Liste\n", encoding="utf-8")
+        git(other, "add", "-A")
+        git(other, "commit", "-q", "-m", "Vertrieb")
+        git(other, "push", "-q", "origin", "main")
+        assert "kunde/vertrieb" in c.post("/api/repos/kunde/sync").json()["vaults"]
+        # Aufteilung ausschalten: nur noch das Repo als Vault
+        r = c.put("/api/repos/kunde", json={"split": False})
+        assert r.status_code == 200 and r.json()["vaults"] == []
+        assert call(c, "guide", url="/mcp/kunde/technik")[0] == 404
+        assert call(c, "guide", url="/mcp/kunde")[0] == 200

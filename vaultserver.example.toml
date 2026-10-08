@@ -42,6 +42,7 @@ remote = "origin"
 # name = "acme"
 # url = "https://github.com/acme/vault.git"
 # branch = "main"
+# split = false            # true: jeder Ordner der obersten Ebene im Repo ist ein eigener Vault
 # push = true                # Token aus VS_GIT_TOKEN_ACME
 
 [semantic]                 # Phase 6, braucht Ollama mit Embedding-Modell

@@ -279,7 +279,9 @@ def create_app(config: Config, start_background: bool = True) -> FastAPI:
                        "readonly": bool(t.annotations and getattr(t.annotations, "read_only_hint", getattr(t.annotations, "readOnlyHint", False)))} for t in tools],
             "clients": svc.clients.list(),
             "projects": [{"name": p.name, "folder": p.folder, "start": p.start or None,
-                          "repo": p.folder in config.repo_folders} for p in svc.projects().values()],
+                          "repo": p.folder in config.repo_folders,
+                          "in_repo": p.folder.split("/", 1)[0] if "/" in p.name else None}
+                         for p in svc.projects().values()],
             "areas": [a.name for a in config.areas],
             "vault": config.vault_path.name,
             "git_push": config.git_push,
@@ -288,11 +290,17 @@ def create_app(config: Config, start_background: bool = True) -> FastAPI:
 
     # -------------------------------------------------------------- Einrichtung: eingebundene Repos
 
+    def repo_info(name: str) -> dict:
+        """Repo mit seinen Vaults: bei Aufteilung die Unterordner, sonst das Repo selbst."""
+        out = svc.repos.info(name)
+        out["vaults"] = sorted(p.name for p in svc.projects().values() if p.folder.startswith(name + "/"))
+        return out
+
     def repo_rows() -> list[dict]:
         rows = []
         for r in svc.repos.list():
             try:
-                rows.append(svc.repos.info(r.name))
+                rows.append(repo_info(r.name))
             except Exception as e:  # noqa: BLE001 – ein kaputtes Repo darf die Liste nicht verhindern
                 rows.append({**r.public(), "error": svc.store.git.redact(str(e))})
         return rows
@@ -349,7 +357,8 @@ def create_app(config: Config, start_background: bool = True) -> FastAPI:
             r = svc.repos.add(data.get("name", ""), data.get("url", ""), branch=data.get("branch", ""),
                               token=data.get("token", ""), username=data.get("username") or "x-access-token",
                               committer=data.get("committer", ""), push=data.get("push", True),
-                              pull_seconds=data.get("pull_seconds"), agent=f"web/{web_user(request)}")
+                              pull_seconds=data.get("pull_seconds"), agent=f"web/{web_user(request)}",
+                              split=bool(data.get("split", False)))
         except Exception as e:  # noqa: BLE001
             return repo_err(e)
         with svc.lock:
@@ -357,7 +366,7 @@ def create_app(config: Config, start_background: bool = True) -> FastAPI:
         svc.store.ensure_bin()
         svc.feed.publish(["."], "Repo eingebunden", tree=True)
         log.info("Repo eingebunden: %s (%s, von %s)", r.name, r.public()["url"], web_user(request))
-        return svc.repos.info(r.name)
+        return repo_info(r.name)
 
     @app.put("/api/repos/{name}")
     def repos_update(request: Request, name: str, data: dict = Body(...)):
@@ -368,13 +377,15 @@ def create_app(config: Config, start_background: bool = True) -> FastAPI:
         try:
             r = svc.repos.update(name, token=data.get("token"), branch=data.get("branch"),
                                  username=data.get("username"), committer=data.get("committer"),
-                                 push=data.get("push"), pull_seconds=data.get("pull_seconds"))
+                                 push=data.get("push"), pull_seconds=data.get("pull_seconds"),
+                                 split=data.get("split"))
         except Exception as e:  # noqa: BLE001
             return repo_err(e)
         with svc.lock:
             svc.index.sync()
+        svc.feed.publish(["."], "Repo geändert", tree=True)
         log.info("Repo geändert: %s (von %s)", r.name, web_user(request))
-        return svc.repos.info(r.name)
+        return repo_info(r.name)
 
     @app.post("/api/repos/{name}/sync")
     def repos_sync(request: Request, name: str):
@@ -391,7 +402,7 @@ def create_app(config: Config, start_background: bool = True) -> FastAPI:
                 svc.store.pull(only={name})
             except Exception:  # noqa: BLE001
                 pass
-            return svc.repos.info(name)
+            return repo_info(name)
         except Exception as e:  # noqa: BLE001
             return repo_err(e)
 
