@@ -67,6 +67,11 @@ def load_projects(config: Config) -> dict[str, Project]:
         hidden = set(config.exclude) | set(config.archive_folders)
         raw = {slug(p.name): p.name for p in sorted(vault.iterdir())
                if p.is_dir() and not p.name.startswith(".") and p.name not in hidden and slug(p.name)}
+    raw = dict(raw)
+    covered = {(v if isinstance(v, str) else v.get("folder", "")).strip("/") for v in raw.values()}
+    for folder in config.repo_folders:     # eingebundene Repos sind immer Projekte
+        if folder not in covered and (vault / folder).is_dir():
+            raw[folder] = folder
     out: dict[str, Project] = {}
     for name, spec in raw.items():
         spec = {"folder": spec} if isinstance(spec, str) else dict(spec)

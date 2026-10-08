@@ -32,7 +32,7 @@ class Feed:
         paths = [p for p in dict.fromkeys(paths) if p]
         changed, removed = [], []
         for p in paths:
-            if self.bin and (p == self.bin or p.startswith(self.bin + "/")):
+            if self.bin and self.bin in p.split("/")[:2]:    # Papierkorb im Stamm oder in einem Repo
                 tree = True              # Papierkorb: nur Zähler im Baum
                 continue
             name = p.rsplit("/", 1)[-1]

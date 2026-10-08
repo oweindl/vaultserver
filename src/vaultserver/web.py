@@ -22,6 +22,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from .config import Config
 from .gitops import ensure_vault
+from .secretbox import server_secret
 from .index import Index
 from .mcp_server import build_mcp
 from .render import render
@@ -56,13 +57,7 @@ def check_password(password: str, stored: str) -> bool:
 
 
 def _secret(config: Config) -> bytes:
-    if config.secret:
-        return config.secret.encode()
-    f = config.db_path.parent / "secret"
-    if not f.exists():
-        f.write_text(secrets.token_hex(32))
-        f.chmod(0o600)
-    return f.read_text().strip().encode()
+    return server_secret(config)
 
 
 MIN_PASSWORD = 8
@@ -121,7 +116,7 @@ def read_session(cookie: str, key: bytes, users: Users) -> str | None:
 
 def git_info(config: Config, svc: Service) -> dict:
     """Remote (ohne Zugangsdaten), Branch und letzter Pull/Push des Vault-Repos."""
-    git = svc.store.git
+    git = svc.store.git.root
     if not git.enabled:
         return {"enabled": False}
     return {"enabled": True, "remote": git.remote_url(config.git_remote), "branch": git.current_branch(),
@@ -264,7 +259,7 @@ def create_app(config: Config, start_background: bool = True) -> FastAPI:
     def me(request: Request):
         return {"agent": agent(request), "user": getattr(request.state, "user", None), "areas": [a.name for a in config.areas],
                 "semantic": bool(svc.semantic), "last_error": svc.last_error,
-                "git": svc.store.git.enabled, "push": config.git_push}
+                "git": svc.store.git.enabled, "push": config.git_push or any(r.push for r in svc.repos.list())}
 
     # -------------------------------------------------------------- Einrichtung: MCP-Zugänge
 
@@ -283,12 +278,122 @@ def create_app(config: Config, start_background: bool = True) -> FastAPI:
             "tools": [{"name": t.name, "description": (t.description or "").split("\n")[0],
                        "readonly": bool(t.annotations and getattr(t.annotations, "read_only_hint", getattr(t.annotations, "readOnlyHint", False)))} for t in tools],
             "clients": svc.clients.list(),
-            "projects": [{"name": p.name, "folder": p.folder, "start": p.start or None} for p in svc.projects().values()],
+            "projects": [{"name": p.name, "folder": p.folder, "start": p.start or None,
+                          "repo": p.folder in config.repo_folders} for p in svc.projects().values()],
             "areas": [a.name for a in config.areas],
             "vault": config.vault_path.name,
             "git_push": config.git_push,
             "git": git_info(config, svc),
         }
+
+    # -------------------------------------------------------------- Einrichtung: eingebundene Repos
+
+    def repo_rows() -> list[dict]:
+        rows = []
+        for r in svc.repos.list():
+            try:
+                rows.append(svc.repos.info(r.name))
+            except Exception as e:  # noqa: BLE001 – ein kaputtes Repo darf die Liste nicht verhindern
+                rows.append({**r.public(), "error": svc.store.git.redact(str(e))})
+        return rows
+
+    def repo_err(e: Exception):
+        return JSONResponse({"error": svc.store.git.redact(str(e))}, status_code=400)
+
+    def push_pending(name: str) -> None:
+        """Offene Commits eines Repos vor Branch-Wechsel oder Entfernen pushen (Fehler stehen im Status)."""
+        if name in svc.store.dirty:
+            try:
+                svc.store.push()
+            except Exception:  # noqa: BLE001
+                pass
+
+    @app.get("/api/repos")
+    def repos_list(request: Request):
+        if not web_user(request):
+            return only_web()
+        return {"repos": repo_rows(), "schemes": config.repo_schemes}
+
+    @app.post("/api/repos/test")
+    def repos_test(request: Request, data: dict = Body(...)):
+        if not web_user(request):
+            return only_web()
+        try:
+            return svc.repos.test(data.get("url", ""), data.get("token", ""), data.get("username") or "x-access-token",
+                                  data.get("name", ""))
+        except Exception as e:  # noqa: BLE001
+            return repo_err(e)
+
+    @app.post("/api/repos")
+    def repos_add(request: Request, data: dict = Body(...)):
+        if not web_user(request):
+            return only_web()
+        try:
+            r = svc.repos.add(data.get("name", ""), data.get("url", ""), branch=data.get("branch", ""),
+                              token=data.get("token", ""), username=data.get("username") or "x-access-token",
+                              committer=data.get("committer", ""), push=data.get("push", True),
+                              pull_seconds=data.get("pull_seconds"), agent=f"web/{web_user(request)}")
+        except Exception as e:  # noqa: BLE001
+            return repo_err(e)
+        with svc.lock:
+            svc.index.sync()
+        svc.store.ensure_bin()
+        svc.feed.publish(["."], "Repo eingebunden", tree=True)
+        log.info("Repo eingebunden: %s (%s, von %s)", r.name, r.public()["url"], web_user(request))
+        return svc.repos.info(r.name)
+
+    @app.put("/api/repos/{name}")
+    def repos_update(request: Request, name: str, data: dict = Body(...)):
+        if not web_user(request):
+            return only_web()
+        if data.get("branch"):
+            push_pending(name)
+        try:
+            r = svc.repos.update(name, token=data.get("token"), branch=data.get("branch"),
+                                 username=data.get("username"), committer=data.get("committer"),
+                                 push=data.get("push"), pull_seconds=data.get("pull_seconds"))
+        except Exception as e:  # noqa: BLE001
+            return repo_err(e)
+        with svc.lock:
+            svc.index.sync()
+        log.info("Repo geändert: %s (von %s)", r.name, web_user(request))
+        return svc.repos.info(r.name)
+
+    @app.post("/api/repos/{name}/sync")
+    def repos_sync(request: Request, name: str):
+        if not web_user(request):
+            return only_web()
+        try:
+            svc.repos.get(name)
+            svc.store.dirty.add(name)
+            try:
+                svc.store.push()
+            except Exception:  # noqa: BLE001 – steht im Status
+                pass
+            try:
+                svc.store.pull(only={name})
+            except Exception:  # noqa: BLE001
+                pass
+            return svc.repos.info(name)
+        except Exception as e:  # noqa: BLE001
+            return repo_err(e)
+
+    @app.delete("/api/repos/{name}")
+    def repos_remove(request: Request, name: str, force: bool = False):
+        if not web_user(request):
+            return only_web()
+        if not force:
+            push_pending(name)
+        try:
+            out = svc.repos.remove(name, force=force)
+        except Exception as e:  # noqa: BLE001
+            return repo_err(e)
+        with svc.lock:
+            svc.index.sync()
+        svc.store.dirty.discard(name)
+        svc.feed.publish(["."], "Repo entfernt", tree=True)
+        log.info("Repo entfernt: %s (von %s)", name, web_user(request))
+        return out
 
     @app.post("/api/clients")
     def client_create(request: Request, data: dict = Body(...)):

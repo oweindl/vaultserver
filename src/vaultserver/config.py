@@ -73,6 +73,9 @@ class Config:
     watch_seconds: float = 3.0          # Datei-Wächter, 0 = aus
     claim_minutes: int = 120
 
+    repos: list[dict] = field(default_factory=list)          # [[repos]]: eingebundene Repos aus der toml
+    repo_schemes: list[str] = field(default_factory=lambda: ["https"])   # erlaubte Adressen für Repos
+    repo_folders: list[str] = field(default_factory=list)    # zur Laufzeit: Ordner der eingebundenen Repos
     code_repos: list[dict] = field(default_factory=list)  # Idee 8: {path, name, url}
     commit_link_minutes: int = 0        # 0 = nur auf Aufruf
 
@@ -133,6 +136,8 @@ class Config:
             git_committer=git.get("committer", ""),
             watch_seconds=server.get("watch_seconds", 3.0),
             claim_minutes=server.get("claim_minutes", 120),
+            repos=data.get("repos", []),
+            repo_schemes=git.get("repo_schemes", ["https"]),
             code_repos=[{**r, "path": str((base / r["path"]).expanduser().resolve())}
                         for r in data.get("code_repos", [])],
             commit_link_minutes=data.get("commit_link_minutes", 0),

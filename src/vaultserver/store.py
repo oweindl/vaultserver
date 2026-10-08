@@ -24,7 +24,8 @@ from pathlib import Path, PurePosixPath
 import yaml
 
 from .config import Area, Config
-from .gitops import Git, vault_git
+from .gitops import Git, GitError, VaultGit, vault_git
+from .repos import Repos
 from .index import Index, norm_key
 from .parser import MDLINK_RE, WIKILINK_RE, parse_note
 
@@ -125,16 +126,18 @@ def replace_block(text: str, start_marker: str, end_marker: str, body: str,
 
 
 class Store:
-    def __init__(self, config: Config, index: Index | None = None):
+    def __init__(self, config: Config, index: Index | None = None, repos: Repos | None = None):
         self.config = config
         self.index = index or Index(config)
-        self.git = vault_git(config)
-        # Ergebnis des letzten Pull/Push für Anzeige und /healthz
-        self.git_status: dict[str, dict | None] = {"pull": None, "push": None}
         self.lock = threading.RLock()
+        self.repos = repos or Repos(config, self.lock)
+        # Repo im Stamm plus eingebundene Repos (Ordner der obersten Ebene)
+        self.git = VaultGit(vault_git(config), self.repos.mounted)
+        # Ergebnis des letzten Pull/Push des Stamm-Repos für Anzeige und /healthz
+        self.git_status: dict[str, dict | None] = {"pull": None, "push": None}
         # Version -> Text früherer Stände, für Abschnitts-Patches gegen ältere Versionen
         self._history: OrderedDict[str, str] = OrderedDict()
-        self.dirty_push = False
+        self.dirty: set[str] = set()      # Repos mit Commits, die noch gepusht werden müssen ("" = Stamm)
         # Rückmeldung an die Live-Anzeige: (Pfade, Agent) – gesetzt vom Service
         self.on_change = None
 
@@ -201,9 +204,8 @@ class Store:
             self.index.index_file(p)
         commit = None
         if self.config.git_commit:
-            commit = self.git.commit(paths, f"{self._agent_label(agent)}: {message}", self._agent_label(agent))
-            if commit:
-                self.dirty_push = True
+            commit, repos = self.git.commit(paths, f"{self._agent_label(agent)}: {message}", self._agent_label(agent))
+            self.dirty |= repos
         self._notify(paths, agent)
         return commit
 
@@ -467,6 +469,8 @@ class Store:
         dst = dst.strip().lstrip("/")
         if src.lower().endswith(".md") or not PurePosixPath(src).suffix:
             src, dst = self._norm_path(src), self._norm_path(dst)
+        if src.strip("/") in self.config.repo_folders or dst.strip("/") in self.config.repo_folders:
+            raise Rejected("Eingebundene Repos lassen sich nicht verschieben (Einrichtung › Repositories)")
         with self.lock:
             s_full, d_full = self._abs(src), self._abs(dst)
             if not s_full.exists():
@@ -590,8 +594,19 @@ class Store:
     def bin(self) -> str:
         return self.config.recycle_folder
 
+    @property
+    def bins(self) -> list[str]:
+        """Papierkörbe: einer im Stamm, einer je eingebundenem Repo (Gelöschtes bleibt in seinem Repo)."""
+        if not self.bin:
+            return []
+        return [self.bin, *(f"{n}/{self.bin}" for n in self.config.repo_folders)]
+
+    def _bin_for(self, path: str) -> str:
+        head = path.split("/", 1)[0]
+        return f"{head}/{self.bin}" if head in self.config.repo_folders else self.bin
+
     def _in_bin(self, path: str) -> bool:
-        return bool(self.bin) and (path == self.bin or path.startswith(self.bin + "/"))
+        return any(path == b or path.startswith(b + "/") for b in self.bins)
 
     def _files_under(self, rel: str) -> list[str]:
         """Alle Dateien (auch .gitkeep) unter einem Ordner, relativ zum Vault."""
@@ -606,13 +621,19 @@ class Store:
         """Den Papierkorb-Ordner anlegen, falls er fehlt (er muss immer da sein)."""
         if not self.bin:
             return None
+        commit = None
         with self.lock:
-            keep = self.config.vault_path / self.bin / self.KEEP
-            if keep.exists():
-                return None
-            keep.parent.mkdir(parents=True, exist_ok=True)
-            keep.write_text("", encoding="utf-8")
-            return self._finish_raw([f"{self.bin}/{self.KEEP}"], f"Papierkorb {self.bin} angelegt", "vaultserver")
+            for b in self.bins:
+                head = b.split("/", 1)[0]
+                if b != self.bin and not (self.config.vault_path / head / ".git").exists():
+                    continue   # Repo noch nicht geklont
+                keep = self.config.vault_path / b / self.KEEP
+                if keep.exists():
+                    continue
+                keep.parent.mkdir(parents=True, exist_ok=True)
+                keep.write_text("", encoding="utf-8")
+                commit = self._finish_raw([f"{b}/{self.KEEP}"], f"Papierkorb {b} angelegt", "vaultserver") or commit
+        return commit
 
     def mkdir(self, path: str, agent: str, message: str | None = None) -> dict:
         """Neuen (leeren) Ordner anlegen; ohne Schrägstrich = neues Stammverzeichnis („neuer Vault“)."""
@@ -636,6 +657,8 @@ class Store:
             raise Rejected("Der ganze Vault lässt sich nicht löschen")
         if self._in_bin(path):
             raise Rejected(f"Liegt schon im Papierkorb – dort „endgültig löschen“ verwenden")
+        if path in self.config.repo_folders:
+            raise Rejected(f"„{path}“ ist ein eingebundenes Repo – in der Einrichtung entfernen")
         with self.lock:
             full = self._abs(path)
             if not full.exists() and not full.is_dir():
@@ -657,7 +680,7 @@ class Store:
                         self._check_claim(f, agent, force)
             else:
                 files = [path]
-            entry = f"{self.bin}/{time.strftime('%Y%m%dT%H%M%S')}-{secrets.token_hex(2)}"
+            entry = f"{self._bin_for(path)}/{time.strftime('%Y%m%dT%H%M%S')}-{secrets.token_hex(2)}"
             dest = self.config.vault_path / entry / path
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(full), str(dest))
@@ -671,54 +694,58 @@ class Store:
                 self.index.db.execute("DELETE FROM claims WHERE path = ?", (f,))
             moved = [f"{entry}/{f}" for f in files] + [f"{entry}/{self.META}"]
             commit = self._finish_raw(files + moved, message or f"In den Papierkorb: {path}", agent)
-            return {"path": path, "kind": kind, "trashed": True, "id": entry.split("/", 1)[1],
+            return {"path": path, "kind": kind, "trashed": True, "id": entry.rsplit("/", 1)[1],
                     "files": len(files), "commit": commit}
 
     def _finish_raw(self, paths: list[str], message: str, agent: str) -> str | None:
         """Wie _finish, aber ohne Index (Papierkorb ist nicht im Index)."""
         commit = None
         if self.config.git_commit:
-            commit = self.git.commit(paths, f"{self._agent_label(agent)}: {message}", self._agent_label(agent))
-            if commit:
-                self.dirty_push = True
+            commit, repos = self.git.commit(paths, f"{self._agent_label(agent)}: {message}", self._agent_label(agent))
+            self.dirty |= repos
         self._notify(paths, agent)
         return commit
 
-    def _entry(self, entry_id: str) -> tuple[Path, dict]:
+    def _entry(self, entry_id: str) -> tuple[Path, dict, str]:
+        """(Ordner, Herkunft, Papierkorb relativ zum Vault) eines Eintrags."""
         if not re.fullmatch(r"[0-9T]{15}-[0-9a-f]{4}", entry_id or ""):
             raise KeyError(f"Papierkorb-Eintrag nicht gefunden: {entry_id}")
-        d = self.config.vault_path / self.bin / entry_id
-        try:
-            return d, json.loads((d / self.META).read_text(encoding="utf-8"))
-        except FileNotFoundError:
-            raise KeyError(f"Papierkorb-Eintrag nicht gefunden: {entry_id}") from None
+        for b in self.bins:
+            d = self.config.vault_path / b / entry_id
+            try:
+                return d, json.loads((d / self.META).read_text(encoding="utf-8")), b
+            except FileNotFoundError:
+                continue
+        raise KeyError(f"Papierkorb-Eintrag nicht gefunden: {entry_id}")
 
     def bin_list(self) -> list[dict]:
-        base = self.config.vault_path / self.bin
         out = []
         with self.lock:
-            for d in sorted(base.iterdir(), reverse=True) if base.is_dir() else []:
-                if not d.is_dir():
-                    continue
-                try:
-                    meta = json.loads((d / self.META).read_text(encoding="utf-8"))
-                except (FileNotFoundError, ValueError):
-                    continue
-                target = self.config.vault_path / meta["original"]
-                out.append({"id": d.name, **meta, "exists": target.exists()})
+            for b in self.bins:
+                base = self.config.vault_path / b
+                for d in base.iterdir() if base.is_dir() else []:
+                    if not d.is_dir():
+                        continue
+                    try:
+                        meta = json.loads((d / self.META).read_text(encoding="utf-8"))
+                    except (FileNotFoundError, ValueError):
+                        continue
+                    target = self.config.vault_path / meta["original"]
+                    out.append({"id": d.name, **meta, "exists": target.exists()})
+        out.sort(key=lambda e: e["id"], reverse=True)
         return out
 
     def restore(self, entry_id: str, agent: str, message: str | None = None) -> dict:
         """Eintrag an die alte Stelle zurück. Ordner werden mit einem vorhandenen Ordner zusammengeführt;
         gibt es eine Datei dort schon, wird nichts verschoben und die Konflikte werden genannt."""
         with self.lock:
-            d, meta = self._entry(entry_id)
+            d, meta, b = self._entry(entry_id)
             orig = meta["original"]
             src_root = d / orig
             if not src_root.exists():
                 raise KeyError(f"Inhalt von {entry_id} fehlt im Papierkorb")
             rel_files = ([orig] if src_root.is_file()
-                         else [f[len(f"{self.bin}/{entry_id}/"):] for f in self._files_under(f"{self.bin}/{entry_id}/{orig}")])
+                         else [f[len(f"{b}/{entry_id}/"):] for f in self._files_under(f"{b}/{entry_id}/{orig}")])
             clash = [f for f in rel_files if (self.config.vault_path / f).exists() and not f.endswith("/" + self.KEEP)]
             if clash:
                 raise Rejected(f"Gibt es an der alten Stelle schon: {', '.join(clash[:5])}"
@@ -726,14 +753,14 @@ class Store:
             for f in rel_files:
                 dst = self.config.vault_path / f
                 if dst.exists():   # nur .gitkeep
-                    (self.config.vault_path / self.bin / entry_id / f).unlink()
+                    (d / f).unlink()
                     continue
                 dst.parent.mkdir(parents=True, exist_ok=True)
-                shutil.move(str(self.config.vault_path / self.bin / entry_id / f), str(dst))
+                shutil.move(str(d / f), str(dst))
             shutil.rmtree(d)
             for f in rel_files:
                 self.index.index_file(f)
-            gone = [f"{self.bin}/{entry_id}/{f}" for f in rel_files] + [f"{self.bin}/{entry_id}/{self.META}"]
+            gone = [f"{b}/{entry_id}/{f}" for f in rel_files] + [f"{b}/{entry_id}/{self.META}"]
             commit = self._finish_raw(rel_files + gone, message or f"Wiederhergestellt: {orig}", agent)
             return {"id": entry_id, "path": orig, "kind": meta["kind"], "restored": True, "files": len(rel_files),
                     "commit": commit}
@@ -744,8 +771,8 @@ class Store:
             ids = [entry_id] if entry_id else [e["id"] for e in self.bin_list()]
             paths = []
             for i in ids:
-                d, meta = self._entry(i)
-                paths += self._files_under(f"{self.bin}/{i}")
+                d, meta, b = self._entry(i)
+                paths += self._files_under(f"{b}/{i}")
                 shutil.rmtree(d)
             if not ids:
                 return {"purged": 0, "commit": None}
@@ -1069,75 +1096,140 @@ class Store:
     # ------------------------------------------------------------ Änderungen (Idee 4)
 
     def changes_since(self, since: str, include_archive: bool = True) -> dict:
+        """Änderungen seit einem Commit oder Zeitpunkt über alle Repos des Vaults. Ein Commit-Hash gilt nur
+        für das Repo, zu dem er gehört; ein Zeitpunkt für alle."""
         with self.lock:
-            if not self.git.enabled:
+            parts = [(p, g) for p, g in self.git.parts() if g.enabled]
+            if not parts:
                 raise Rejected("Vault ist kein Git-Repo")
-            base = self.git.resolve_since(since)
-            out = []
-            for status, path in self.git.changed_files(base):
-                entry: dict = {"path": path, "change": {"A": "neu", "M": "geändert", "D": "gelöscht",
-                                                         "R": "verschoben"}.get(status, status)}
-                if path.endswith(".md") and status in ("M", "R") and self._abs(path).exists():
-                    text = self._abs(path).read_text(encoding="utf-8")
-                    spans = section_spans(text)
-                    touched = []
-                    for a, b in self.git.changed_lines(base, path):
-                        for line in range(a, b + 1):
-                            # innerster Abschnitt, der die (1-basierte) Zeile enthält
-                            inner = [sp for sp in spans if sp.start < line <= sp.end]
-                            if inner:
-                                best = max(inner, key=lambda sp: (sp.level, sp.start))
-                                if best.heading_path not in touched:
-                                    touched.append(best.heading_path)
-                    entry["sections"] = touched
-                out.append(entry)
-            commits = self.git.log(500, rev_range=f"{base}..HEAD")
-            return {"since": base, "head": self.git.head(), "files": out,
-                    "commits": [{k: c[k] for k in ("commit", "author", "date", "message")} for c in commits]}
+            owners = [(p, g) for p, g in parts if g.is_commit(since)]
+            if owners:
+                parts = owners[:1]
+            out, commits, heads, base = [], [], {}, since
+            for prefix, g in parts:
+                b = g.resolve_since(since)
+                if len(parts) == 1:
+                    base = b
+                for status, rel in g.changed_files(b):
+                    path = self.git.join(prefix, rel)
+                    entry: dict = {"path": path, "change": {"A": "neu", "M": "geändert", "D": "gelöscht",
+                                                             "R": "verschoben"}.get(status, status)}
+                    if path.endswith(".md") and status in ("M", "R") and self._abs(path).exists():
+                        text = self._abs(path).read_text(encoding="utf-8")
+                        spans = section_spans(text)
+                        touched = []
+                        for a, bb in g.changed_lines(b, rel):
+                            for line in range(a, bb + 1):
+                                # innerster Abschnitt, der die (1-basierte) Zeile enthält
+                                inner = [sp for sp in spans if sp.start < line <= sp.end]
+                                if inner:
+                                    best = max(inner, key=lambda sp: (sp.level, sp.start))
+                                    if best.heading_path not in touched:
+                                        touched.append(best.heading_path)
+                        entry["sections"] = touched
+                    out.append(entry)
+                for c in g.log(500, rev_range=f"{b}..HEAD"):
+                    row = {k: c[k] for k in ("commit", "author", "date", "message")}
+                    if prefix:
+                        row["repo"] = prefix
+                    commits.append(row)
+                heads[prefix or "."] = g.head()
+            commits.sort(key=lambda c: c["date"], reverse=True)
+            head = heads.get(parts[0][0] or ".") if len(parts) == 1 else (heads.get(".") or next(iter(heads.values())))
+            res = {"since": base, "head": head, "files": out, "commits": commits}
+            if len(heads) > 1 or "." not in heads:
+                res["heads"] = heads
+            return res
 
     # ------------------------------------------------------------ Git-Abgleich
 
-    @contextlib.contextmanager
-    def _track(self, what: str):
+    def _track(self, prefix: str, what: str, ok: bool, error: str = "") -> None:
+        if prefix:
+            self.repos.track(prefix, what, ok, error)
+            return
         at = time.strftime("%Y-%m-%dT%H:%M:%S%z")
-        try:
-            yield
-        except Exception as e:
-            self.git_status[what] = {"ok": False, "at": at, "error": self.git.redact(str(e))[:500]}
-            raise
-        self.git_status[what] = {"ok": True, "at": at}
+        self.git_status[what] = {"ok": True, "at": at} if ok else {"ok": False, "at": at, "error": error[:500]}
 
-    def pull(self) -> dict:
+    def _pull_settings(self, prefix: str) -> tuple[int, str]:
+        """(Abstand in Sekunden, Branch) für ein Repo."""
+        if not prefix:
+            return self.config.git_pull_seconds, self.config.git_branch
+        r = self.repos.get(prefix)
+        return r.pull_seconds, r.branch
+
+    def pull(self, only: set[str] | None = None) -> dict:
+        """Alle (oder die genannten) Repos holen. Ein Fehler in einem Repo hält die anderen nicht auf;
+        er steht im Status des Repos und wird am Ende weitergereicht."""
         with self.lock:
-            if not self.git.enabled or not self.config.git_pull_seconds:
-                return {"pulled": False}
-            before = self.git.head()
-            with self._track("pull"):
-                self.git.pull(self.config.git_remote, self.config.git_branch)
-            after = self.git.head()
-            st = self.index.sync() if before != after else None
-            if st:
+            changed: list[str] = []
+            errors: list[str] = []
+            heads = {}
+            for prefix, g in self.git.parts():
+                if only is not None and prefix not in only:
+                    continue
+                every, branch = self._pull_settings(prefix)
+                if not g.enabled or not every or not g.remote_url(self.config.git_remote):
+                    continue           # ohne Remote (rein lokales Repo) gibt es nichts zu holen
+                before = g.head()
                 try:
-                    files = [p for _s, p in self.git.changed_files(before)]
-                except Exception:  # noqa: BLE001
-                    files = st.changed_paths + st.removed_paths
-                self._notify(files or ["."], "git pull")
-            return {"pulled": before != after, "head": after,
+                    g.pull(self.config.git_remote, branch)
+                    self._track(prefix, "pull", True)
+                except Exception as e:  # noqa: BLE001
+                    msg = self.git.redact(str(e))
+                    self._track(prefix, "pull", False, msg)
+                    errors.append(f"{prefix or 'Vault'}: {msg}")
+                    continue
+                after = g.head()
+                heads[prefix or "."] = after
+                if before != after:
+                    try:
+                        changed += [self.git.join(prefix, p) for _s, p in g.changed_files(before)]
+                    except Exception:  # noqa: BLE001
+                        changed.append(prefix or ".")
+            st = self.index.sync() if changed else None
+            if st:
+                self._notify(changed or st.changed_paths + st.removed_paths, "git pull")
+            if errors:
+                raise GitError("; ".join(errors))
+            return {"pulled": bool(changed), "head": heads.get("."), "heads": heads,
                     "sync": {k: getattr(st, k) for k in ("added", "updated", "removed")} if st else None}
+
+    def _push_enabled(self, prefix: str) -> bool:
+        return self.config.git_push if not prefix else self.repos.get(prefix).push
+
+    @property
+    def dirty_push(self) -> bool:
+        return any(self._push_enabled(p) for p in self.dirty if p == "" or p in self.config.repo_folders)
 
     def push(self) -> dict:
         with self.lock:
-            if not (self.git.enabled and self.config.git_push and self.dirty_push):
-                return {"pushed": False}
-            try:
-                self.git.pull(self.config.git_remote, self.config.git_branch)
-            except Exception:
-                pass
-            with self._track("push"):
-                self.git.push(self.config.git_remote, self.config.git_branch)
-            self.dirty_push = False
-            self.index.sync()
-            return {"pushed": True}
+            pushed, errors = [], []
+            for prefix, g in self.git.parts():
+                if prefix not in self.dirty or not g.enabled or not self._push_enabled(prefix):
+                    continue
+                if not g.remote_url(self.config.git_remote):
+                    self.dirty.discard(prefix)
+                    continue
+                _every, branch = self._pull_settings(prefix)
+                try:
+                    try:
+                        g.pull(self.config.git_remote, branch)
+                    except Exception:  # noqa: BLE001
+                        pass
+                    g.push(self.config.git_remote, branch)
+                    self._track(prefix, "push", True)
+                    self.dirty.discard(prefix)
+                    pushed.append(prefix or ".")
+                except Exception as e:  # noqa: BLE001
+                    msg = self.git.redact(str(e))
+                    self._track(prefix, "push", False, msg)
+                    errors.append(f"{prefix or 'Vault'}: {msg}")
+            self.dirty &= {""} | set(self.config.repo_folders)
+            if pushed:
+                self.index.sync()
+            if errors:
+                raise GitError("; ".join(errors))
+            return {"pushed": bool(pushed), "repos": pushed}
 
 
 class _Default(dict):

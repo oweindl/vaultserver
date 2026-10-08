@@ -47,6 +47,36 @@ push = true
 
 Die Einrichtungsseite zeigt Remote, Branch und das Ergebnis des letzten Pull/Push (mit Fehlertext). `/healthz` ist ohne Anmeldung erreichbar und zeigt deshalb nur, ob Pull und Push zuletzt geklappt haben.
 
+## Mehrere Repos einbinden (z. B. je Kunde)
+
+Neben dem Vault selbst kann der Server beliebig viele weitere Git-Repos anbieten. Jedes Repo wird als **Ordner der obersten Ebene** in den Vault geklont und ist damit ein eigenes Projekt:
+
+- eigene MCP-Adresse `/mcp/<name>`, eigener Eintrag in der Vault-Auswahl der Oberfläche,
+- Zugänge (Einrichtung › 3) lassen sich auf genau ein Repo beschränken,
+- Änderungen werden im jeweiligen Repo committet (mit dessen Commit-Kennung), geholt und gepusht; der Papierkorb liegt im Repo (`<name>/RecycleBin`), Gelöschtes wandert also nie in ein anderes Repo,
+- das Repo im Vault-Stamm ignoriert die eingebundenen Ordner (Eintrag in `.git/info/exclude`).
+
+**In der Oberfläche:** Einrichtung › Repositories › „Repository einbinden …“: Adresse, Name, Token, „Verbindung testen“ (zeigt die Branches), Branch wählen, „Klonen und einbinden“. Danach je Repo: Abgleichen (jetzt pushen und holen), Ändern (Token, Branch, Commit-Kennung, Push, Abstand), Entfernen. Nur mit Web-Anmeldung, nicht mit MCP-Tokens.
+
+- Gespeichert in `data/repos.json` (Rechte 600). Tokens darin verschlüsselt mit dem Server-Geheimnis `data/secret`; sie werden nie wieder angezeigt, nicht protokolliert und aus Fehlermeldungen entfernt. Geht `data/secret` verloren, müssen die Tokens neu eingegeben werden.
+- Erlaubt sind nur `https://`-Adressen (`[git] repo_schemes`), ohne Zugangsdaten in der Adresse.
+- Branch wechseln geht nur ohne nicht committete Änderungen; offene Commits werden vorher gepusht.
+- Entfernen verschiebt den Ordner nach `data/removed-repos/<name>-<Zeit>` (nichts geht verloren). Gibt es nicht gepushte Commits oder Änderungen, fragt die Oberfläche nach.
+- Ein eingebundener Ordner lässt sich nicht löschen oder verschieben (nur über die Einrichtung).
+
+**Fest in der Konfiguration** (nur lesbar in der Oberfläche; Ordner fehlt oder ist leer → wird beim Start geklont):
+
+```toml
+[[repos]]
+name = "acme"                       # Ordner und Projekt
+url = "https://github.com/acme/vault.git"
+branch = "main"
+committer = "VaultServer <vaultserver@acme.example>"
+push = true
+pull_seconds = 60
+# Token aus der Umgebung, Standard VS_GIT_TOKEN_<NAME> (hier VS_GIT_TOKEN_ACME); anderer Name: token_env = "…"
+```
+
 ## Docker
 
 Dateien: `Dockerfile`, `compose.yaml`, `.env.example`, `vaultserver.kunde.example.toml`.

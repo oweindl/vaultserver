@@ -11,6 +11,7 @@ from pathlib import PurePosixPath
 from .config import Config
 from .index import Index
 from .semantic import Semantic
+from .repos import Repos
 from .store import Store, find_section
 from .clients import Clients
 from .live import Feed
@@ -58,7 +59,9 @@ class Service:
     def __init__(self, config: Config):
         self.config = config
         self.index = Index(config)
-        self.store = Store(config, self.index)
+        self.repos = Repos(config)
+        self.store = Store(config, self.index, self.repos)
+        self.repos.lock = self.store.lock
         self.clients = Clients(config)
         self.feed = Feed(config.vault_path, config.recycle_folder)
         self.drops = Drops()
@@ -69,6 +72,13 @@ class Service:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self.last_error: str = ""
+        try:
+            cloned = self.repos.ensure_cloned()
+            if cloned:
+                log.info("Repos geklont: %s", ", ".join(cloned))
+        except Exception as e:  # noqa: BLE001 – ein Repo darf den Start nicht verhindern
+            self.last_error = f"Repos: {self.store.git.redact(str(e))}"
+            log.error("Repos: %s", self.store.git.redact(str(e)))
         with self.lock:
             self.index.sync()
         try:
@@ -184,19 +194,25 @@ class Service:
 
     def _loop(self) -> None:
         c = self.config
-        last = {"pull": 0.0, "push": 0.0, "links": 0.0, "sem": 0.0}
+        last = {"push": 0.0, "links": 0.0, "sem": 0.0}
+        pulled: dict[str, float] = {}      # Repo ("" = Stamm) -> letzter Pull
         while not self._stop.wait(max(1.0, c.watch_seconds or 5.0)):
             now = time.time()
             try:
                 if c.watch_seconds:
                     self.scan()
-                if c.git_pull_seconds and now - last["pull"] >= c.git_pull_seconds:
-                    last["pull"] = now
-                    r = self.store.pull()
+                due = set()
+                for prefix, _g in self.store.git.parts():
+                    every, _b = self.store._pull_settings(prefix)
+                    if every and now - pulled.get(prefix, 0.0) >= every:
+                        due.add(prefix)
+                        pulled[prefix] = now
+                if due:
+                    r = self.store.pull(only=due)
                     if r.get("pulled"):
                         log.info("git pull: %s", r)
                         self.store.ensure_bin()  # falls jemand den Papierkorb woanders gelöscht hat
-                if c.git_push and self.store.dirty_push and now - last["push"] >= 10:
+                if self.store.dirty_push and now - last["push"] >= 10:
                     last["push"] = now
                     self.store.push()
                 if c.commit_link_minutes and now - last["links"] >= c.commit_link_minutes * 60:

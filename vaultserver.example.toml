@@ -35,6 +35,14 @@ remote = "origin"
 # username = "x-access-token"   # GitHub; GitLab: "oauth2"; Gitea: Benutzername
 # token_env = "VS_GIT_TOKEN"    # Name der Umgebungsvariable mit dem Token
 # committer = "VaultServer Kunde <vault@kunde.example>"   # leer = VaultServer <vaultserver@Rechner>
+# repo_schemes = ["https"]   # erlaubte Adressen für eingebundene Repos ([[repos]] / Web-Einrichtung)
+
+# Weitere Repos als eigene Projekte (Ordner der obersten Ebene); auch in der Web-Einrichtung › Repositories
+# [[repos]]
+# name = "acme"
+# url = "https://github.com/acme/vault.git"
+# branch = "main"
+# push = true                # Token aus VS_GIT_TOKEN_ACME
 
 [semantic]                 # Phase 6, braucht Ollama mit Embedding-Modell
 enabled = false

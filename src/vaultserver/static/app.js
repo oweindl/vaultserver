@@ -850,8 +850,9 @@ async function showHome() {
 
 
 // ------------------------------------------------------------------ Einrichtung (MCP-Zugänge, Projekte, Anleitungen)
-const gitState = (label, r) => !r ? `${label}: noch nicht` : r.ok ? `${label}: ok (${esc(r.at)})`
-  : `${label}: <span style="color: var(--warn)">Fehler (${esc(r.at)}): ${esc(r.error)}</span>`;
+const shortAt = (iso) => { const d = new Date(iso); return isNaN(d) ? iso : d.toLocaleString("de-DE", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }); };
+const gitState = (label, r) => !r ? `${label}: noch nicht` : r.ok ? `${label}: ok (${esc(shortAt(r.at))})`
+  : `${label}: <span style="color: var(--warn)">Fehler (${esc(shortAt(r.at))}): ${esc(r.error)}</span>`;
 const gitLine = (g) => !g || !g.enabled ? "kein Git-Repo"
   : `<code>${esc(g.remote || "ohne Remote")}</code> · Branch <code>${esc(g.branch)}</code> · ${gitState("Pull", g.pull)} · ${g.push ? gitState("Push", g.push) : "Push aus"}`;
 
@@ -919,9 +920,77 @@ async function newClient(projects) {
   try { tokenDialog(await api("POST", "/api/clients", { name: r.name, project: r.project === ALL ? null : r.project }), "Neuer Zugang"); } catch (e) { fail(e); }
 }
 
+// ------------------------------------------------------------------ Eingebundene Repos (je Repo ein Projekt)
+
+const repoSlug = (url) => (url.replace(/\.git\/?$/, "").replace(/\/+$/, "").split(/[/:]/).pop() || "")
+  .toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 63);
+
+function repoRows(repos) {
+  if (!repos.length) return `<tr><td colspan="4">Noch keine Repos eingebunden.</td></tr>`;
+  return repos.map((r) => `<tr><td style="word-break: break-all"><b>${esc(r.name)}</b>
+      <span class="hp">· ${r.source === "config" ? "vaultserver.toml" : `Oberfläche${r.added_by ? `, ${esc(r.added_by)}` : ""}`}${r.has_token ? "" : " · ohne Token"}</span>
+      <br><code>${esc(r.url)}</code>
+      <br><span class="hp">MCP:</span> <code>${esc(mcpUrl(r.name))}</code> <button type="button" data-copy="${esc(mcpUrl(r.name))}">Kopieren</button></td>
+    <td><code>${esc(r.current_branch || r.branch || "–")}</code>${r.head ? `<br><span class="hp">${esc(r.head)}</span>` : ""}</td>
+    <td>${r.error ? `<span style="color: var(--warn)">${esc(r.error)}</span>` : !r.cloned ? "nicht geklont"
+      : `${gitState("Pull", r.pull)}<br>${r.push ? gitState("Push", r.push) : "Push aus"}`}</td>
+    <td class="act" style="white-space: nowrap"><button data-repo-sync="${esc(r.name)}">Abgleichen</button>
+      ${r.source === "web" ? `<button data-repo-edit="${esc(r.name)}">Ändern</button> <button data-repo-del="${esc(r.name)}">Entfernen</button>` : ""}</td></tr>`).join("");
+}
+
+function repoDialog(existing = null) {
+  const dlg = $("#dlg"), form = $("#dlg-form"), e = existing || {};
+  const edit = !!existing;
+  form.innerHTML = `<h3>${edit ? `Repo „${esc(e.name)}“ ändern` : "Repository einbinden"}</h3>
+    <p class="hp">Das Repo wird als Ordner der obersten Ebene in den Vault geklont und ist damit ein eigenes Projekt
+      (MCP-Adresse <code>/mcp/&lt;name&gt;</code>). Änderungen werden dort committet und gepusht.</p>
+    <div class="row"><label for="r-url">Adresse (HTTPS) *</label><input type="text" id="r-url" value="${esc(e.url || "")}" placeholder="https://github.com/kunde/vault.git" ${edit ? "disabled" : ""}></div>
+    <div class="row"><label for="r-name">Name (Ordner und Projekt) *</label><input type="text" id="r-name" value="${esc(e.name || "")}" placeholder="kunde-vault" ${edit ? "disabled" : ""}></div>
+    <div class="row"><label for="r-user">Benutzername zum Token</label><input type="text" id="r-user" value="${esc(e.username || "x-access-token")}"></div>
+    <div class="row"><label for="r-token">Token${edit ? " (leer lassen = unverändert)" : ""}</label><input type="password" id="r-token" autocomplete="off"></div>
+    <p class="hp">GitHub: fine-grained Token nur für dieses Repo, „Contents: Read and write“, Benutzername <code>x-access-token</code>. GitLab: Projekt-Token mit <code>write_repository</code>, Benutzername <code>oauth2</code>. Das Token wird verschlüsselt gespeichert und nie wieder angezeigt.</p>
+    <div class="row"><label for="r-branch">Branch</label><select id="r-branch"><option value="${esc(e.branch || "")}">${esc(e.branch || "Standard des Repos")}</option></select></div>
+    <p><button type="button" id="r-test">Verbindung testen</button> <span id="r-msg" class="hp"></span></p>
+    <div class="row"><label for="r-committer">Commit-Kennung (Name &lt;adresse&gt;)</label><input type="text" id="r-committer" value="${esc(e.committer || "")}" placeholder="VaultServer &lt;vaultserver@kunde.example&gt;"></div>
+    <div class="row"><label for="r-pull">Holen alle … Sekunden (0 = nie)</label><input type="text" id="r-pull" value="${esc(String(e.pull_seconds ?? 60))}"></div>
+    <div class="row"><label><input type="checkbox" id="r-push" ${e.push === false ? "" : "checked"}> Änderungen pushen</label></div>
+    <div class="btns"><button value="cancel" formnovalidate>Abbrechen</button><button type="button" class="primary" id="r-ok">${edit ? "Speichern" : "Klonen und einbinden"}</button></div>`;
+  const msg = (t, bad = false) => { const m = $("#r-msg"); m.textContent = t; m.style.color = bad ? "var(--warn)" : ""; };
+  const url = $("#r-url"), name = $("#r-name");
+  let nameTouched = edit;
+  name.oninput = () => (nameTouched = true);
+  url.oninput = () => { if (!nameTouched) name.value = repoSlug(url.value); };
+  $("#r-test").onclick = async () => {
+    msg("prüfe …");
+    try {
+      const r = await api("POST", "/api/repos/test", { url: url.value.trim(), token: $("#r-token").value,
+        username: $("#r-user").value.trim(), name: edit ? e.name : "" });
+      const cur = $("#r-branch").value || r.default;
+      $("#r-branch").innerHTML = r.branches.map((b) => `<option ${b === cur ? "selected" : ""}>${esc(b)}</option>`).join("");
+      msg(`erreichbar ✓ · ${r.branches.length} Branch(es), Standard ${r.default || "–"}`);
+    } catch (err) { msg(String(err.message || err), true); }
+  };
+  $("#r-ok").onclick = async () => {
+    const body = { username: $("#r-user").value.trim(), committer: $("#r-committer").value.trim(),
+      push: $("#r-push").checked, pull_seconds: parseInt($("#r-pull").value, 10) || 0, branch: $("#r-branch").value };
+    const tok = $("#r-token").value;
+    if (tok) body.token = tok;
+    $("#r-ok").disabled = true; msg(edit ? "speichere …" : "klone … (kann bei großen Repos dauern)");
+    try {
+      if (edit) await api("PUT", `/api/repos/${enc(e.name)}`, body);
+      else await api("POST", "/api/repos", { ...body, url: url.value.trim(), name: name.value.trim() });
+      dlg.close("done"); toast(edit ? `„${e.name}“ gespeichert` : `„${name.value.trim()}“ eingebunden`);
+      await loadTree(); showSetup();
+    } catch (err) { msg(String(err.message || err), true); $("#r-ok").disabled = false; }
+  };
+  dlg.onclose = () => { form.innerHTML = ""; };
+  dlg.returnValue = ""; dlg.showModal(); (edit ? $("#r-token") : url).focus();
+}
+
 async function showSetup() {
   state.note = null; markActive(); document.title = "Einrichtung – VaultServer";
-  const d = await get("/api/setup");
+  const [d, rp] = await Promise.all([get("/api/setup"), get("/api/repos")]);
+  const repos = rp.repos;
   const t = setupTexts();
   const ago = (ts) => (ts ? fmtDate(ts) : "–");
   const ro = d.tools.filter((x) => x.readonly), rw = d.tools.filter((x) => !x.readonly);
@@ -942,6 +1011,15 @@ async function showSetup() {
       <tr><th>Git</th><td>${gitLine(d.git)}</td></tr>
     </table>
     ${location.protocol === "http:" ? `<div class="banner info">Der Server spricht HTTP ohne TLS – gedacht fürs LAN. Tokens nicht über fremde Netze schicken.</div>` : ""}
+
+    <h3>Repositories</h3>
+    <p>Weitere Git-Repos (z. B. je Kunde) in den Vault einbinden. Jedes Repo liegt als eigener Ordner im Vault, ist ein eigenes <b>Projekt</b> mit eigener MCP-Adresse und wird für sich geholt, committet und gepusht. Zugänge lassen sich unter 3 auf ein Repo beschränken.</p>
+    <table class="list">
+      <tr><th>Repository</th><th>Branch</th><th>Abgleich</th><th></th></tr>
+      ${repoRows(repos)}
+    </table>
+    <p><button class="primary" id="btn-new-repo">Repository einbinden …</button>
+      <span class="hp">Erlaubt: ${rp.schemes.map((x) => `<code>${esc(x)}://</code>`).join(", ")}. Repos aus <code>[[repos]]</code> in <code>vaultserver.toml</code> erscheinen hier nur lesend.</span></p>
 
     <h3>2 · Projekte</h3>
     <p>Über die Projekt-Adresse sehen alle Werkzeuge nur diesen Ordner: Suche, Liste, Änderungen, Prüfung und <code>guide</code> beziehen sich nur auf das Projekt, Pfade sind <b>relativ</b> zum Projektordner (<code>Fixliste/FIX-001.md</code>), Schreiben außerhalb wird abgelehnt. <code>guide</code> nennt die Einstiegsnotiz des Projekts.</p>
@@ -1009,6 +1087,23 @@ async function showSetup() {
     $("#proj-json").textContent = txt; box.querySelector("button").dataset.copy = txt;
   };
   $("#btn-new-client").onclick = () => newClient(d.projects);
+  $("#btn-new-repo").onclick = () => repoDialog();
+  c.querySelectorAll("[data-repo-edit]").forEach((b) => (b.onclick = () => repoDialog(repos.find((r) => r.name === b.dataset.repoEdit))));
+  c.querySelectorAll("[data-repo-sync]").forEach((b) => (b.onclick = async () => {
+    b.disabled = true; b.textContent = "…";
+    try { await api("POST", `/api/repos/${enc(b.dataset.repoSync)}/sync`); await loadTree(); } catch (e) { fail(e); }
+    showSetup();
+  }));
+  c.querySelectorAll("[data-repo-del]").forEach((b) => (b.onclick = async () => {
+    const n = b.dataset.repoDel;
+    if (!confirm(`Repo „${n}“ aus dem Vault nehmen?\nDer Ordner wird nach data/removed-repos verschoben (nicht gelöscht). Zugänge, die nur für „${n}“ gelten, funktionieren danach nicht mehr.`)) return;
+    try { await api("DELETE", `/api/repos/${enc(n)}`); }
+    catch (e) {
+      if (!confirm(`${e.message || e}\n\nTrotzdem entfernen? Nicht gepushte Änderungen bleiben nur im verschobenen Ordner.`)) return;
+      try { await api("DELETE", `/api/repos/${enc(n)}?force=true`); } catch (e2) { fail(e2); return; }
+    }
+    toast(`„${n}“ entfernt`); await loadTree(); showSetup();
+  }));
   c.querySelectorAll("[data-proj]").forEach((sel) => (sel.onchange = async () => {
     try {
       await api("PUT", `/api/clients/${sel.dataset.proj}`, { project: sel.value || null });

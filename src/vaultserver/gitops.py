@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+from datetime import datetime
 import socket
 import subprocess
 from pathlib import Path
@@ -50,7 +51,9 @@ class Git:
         name, email = parse_committer(committer) if committer else ("VaultServer", f"vaultserver@{socket.gethostname()}")
         self.ident = ["-c", f"user.name={name}", "-c", f"user.email={email}"]
         self._token = token
-        self._env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+        # Kennung kommt nur aus der Konfiguration: GIT_COMMITTER_*/GIT_AUTHOR_* aus der Umgebung würden sie überschreiben
+        self._env = {k: v for k, v in os.environ.items()
+                     if not k.startswith(("GIT_COMMITTER_", "GIT_AUTHOR_"))} | {"GIT_TERMINAL_PROMPT": "0"}
         self._auth: list[str] = []
         parts = urlsplit(url) if url else None
         if token and parts and parts.scheme in ("http", "https") and parts.hostname:
@@ -87,6 +90,28 @@ class Git:
 
     def current_branch(self) -> str:
         return self.run("rev-parse", "--abbrev-ref", "HEAD", check=False).strip()
+
+    def is_commit(self, rev: str) -> bool:
+        return self.enabled and self.run("cat-file", "-t", rev, check=False).strip() == "commit"
+
+    def dirty_files(self) -> list[str]:
+        """Nicht committete Änderungen (inkl. unversionierter Dateien)."""
+        return [line[3:] for line in self.run("status", "--porcelain", check=False).splitlines() if line.strip()]
+
+    def ls_remote(self, url: str) -> dict:
+        """Branches und Standard-Branch eines Remotes (ohne Klonen). self.repo ist nur Arbeitsordner."""
+        out = self.run("ls-remote", "--symref", "--", strip_credentials(url), "HEAD", "refs/heads/*")
+        default, branches = "", []
+        for line in out.splitlines():
+            if line.startswith("ref: ") and line.endswith("\tHEAD"):
+                default = line[5:].split("\t")[0].removeprefix("refs/heads/")
+            elif "\trefs/heads/" in line:
+                branches.append(line.split("\trefs/heads/", 1)[1])
+        return {"default": default, "branches": sorted(branches)}
+
+    def switch_branch(self, remote: str, branch: str) -> None:
+        self.run("fetch", "-q", remote, branch)
+        self.run("checkout", "-q", "-B", branch, "--track", f"{remote}/{branch}")
 
     def head(self) -> str:
         return self.run("rev-parse", "HEAD", check=False).strip()
@@ -206,3 +231,77 @@ def ensure_vault(config) -> str:
     if config.git_branch and git.current_branch() != config.git_branch:
         raise GitError(f"{path} steht auf Branch „{git.current_branch()}“, konfiguriert ist „{config.git_branch}“")
     return ""
+
+
+def _when(iso: str) -> float:
+    try:
+        return datetime.fromisoformat(iso).timestamp()
+    except ValueError:
+        return 0.0
+
+
+class VaultGit:
+    """Git für den ganzen Vault: das Repo im Stamm plus eingebundene Repos in Ordnern der obersten Ebene.
+
+    Pfade sind immer Vault-Pfade; Commits werden auf die Repos verteilt, in denen die Dateien liegen."""
+
+    def __init__(self, root: Git, mounted=None):
+        self.root = root
+        self._mounted = mounted or (lambda: {})   # () -> {ordner: Git}
+
+    def parts(self) -> list[tuple[str, Git]]:
+        return [("", self.root), *sorted(self._mounted().items())]
+
+    @property
+    def enabled(self) -> bool:
+        return any(g.enabled for _p, g in self.parts())
+
+    def split(self, path: str) -> tuple[str, Git, str]:
+        head, _, rest = path.partition("/")
+        g = self._mounted().get(head)
+        if g is not None and rest:
+            return head, g, rest
+        if g is not None:                     # der Repo-Ordner selbst
+            return head, g, "."
+        return "", self.root, path
+
+    @staticmethod
+    def join(prefix: str, rel: str) -> str:
+        return f"{prefix}/{rel}" if prefix else rel
+
+    def commit(self, paths: list[str], message: str, agent: str) -> tuple[str | None, set[str]]:
+        """Pfade je Repo committen. Gibt (erster Commit-Hash, Repos mit neuem Commit) zurück."""
+        groups: dict[str, tuple[Git, list[str]]] = {}
+        for p in paths:
+            prefix, g, rel = self.split(p)
+            groups.setdefault(prefix, (g, []))[1].append(rel)
+        first, done = None, set()
+        for prefix, (g, rels) in groups.items():
+            h = g.commit(rels, message, agent)
+            if h:
+                first = first or h
+                done.add(prefix)
+        return first, done
+
+    def head(self) -> str:
+        return self.root.head()
+
+    def log(self, limit: int = 20, path: str | None = None, since: str | None = None) -> list[dict]:
+        if path:
+            prefix, g, rel = self.split(path)
+            if not g.enabled:
+                return []
+            rows = g.log(limit, path=rel, since=since)
+            return [{**c, "files": [self.join(prefix, f) for f in c["files"]]} for c in rows]
+        rows = []
+        for prefix, g in self.parts():
+            if g.enabled:
+                rows += [{**c, "files": [self.join(prefix, f) for f in c["files"]]}
+                         for c in g.log(limit, since=since)]
+        rows.sort(key=lambda c: _when(c["date"]), reverse=True)
+        return rows[:limit]
+
+    def redact(self, text: str) -> str:
+        for _p, g in self.parts():
+            text = g.redact(text)
+        return text

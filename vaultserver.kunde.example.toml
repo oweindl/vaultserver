@@ -39,3 +39,11 @@ max_upload_mb = 25
 
 # Bereiche mit Regeln (Pflichtfelder, erlaubte Werte, Nummern) je Kunde nach Bedarf, Beispiel in
 # vaultserver.example.toml ([[areas]], [canonical], [groups.status]).
+
+# Weitere Repos als eigene Projekte (alternativ in der Web-Einrichtung › Repositories anlegen).
+# [[repos]]
+# name = "acme"
+# url = "https://github.com/acme/vault.git"
+# branch = "main"
+# push = true
+# Token aus der Umgebung VS_GIT_TOKEN_ACME (in .env und compose.yaml unter environment ergänzen)
