@@ -26,6 +26,45 @@ Der Dienst läuft ohne Anmeldung weiter, weil Linger für den Benutzer aktiv ist
 
 Im Hintergrund prüft der Dienst alle 3 Sekunden, ob sich Dateien geändert haben, holt jede Minute Änderungen vom Git-Remote (`pull --rebase`) und pusht etwa 10 Sekunden nach jeder eigenen Änderung. Fehler im Hintergrund erscheinen im Protokoll und auf der Startseite der Web-Oberfläche.
 
+## Vault aus einem Kunden-Repo
+
+Statt eines von Hand geklonten Ordners kann der Vault aus einem beliebigen Git-Repo über HTTPS kommen (GitHub, GitLab, Gitea):
+
+```toml
+[git]
+url = "https://github.com/kunde/vault.git"
+branch = "main"
+username = "x-access-token"     # GitHub; GitLab: "oauth2"; Gitea: Benutzername
+committer = "VaultServer <vaultserver@kunde.example>"
+push = true
+```
+
+- Ist `vault_path` leer oder fehlt, klont VaultServer beim Start dorthin.
+- Liegt dort schon ein Repo, muss sein Remote (`[git] remote`, Standard `origin`) auf dasselbe Repo zeigen (https- und ssh-Schreibweise gelten als gleich) und, wenn `branch` gesetzt ist, dieser Branch ausgecheckt sein. Sonst startet der Server nicht. Ein nicht leerer Ordner ohne Git wird nie überschrieben.
+- Das Token steht nur in der Umgebungsvariable `VS_GIT_TOKEN` (Name änderbar mit `token_env`). VaultServer gibt es nur für den Host aus `url` an git weiter, über die Prozess-Umgebung, nie auf der Kommandozeile. In Fehlermeldungen, Protokoll und Oberfläche erscheint es nie; Zugangsdaten in URLs werden entfernt.
+- Token-Rechte so klein wie möglich: GitHub fine-grained Token nur für dieses Repo mit „Contents: read and write“, GitLab Projekt-Token mit `write_repository`.
+- Ohne `url` bleibt alles wie bisher: Pull und Push gehen an den Remote des vorhandenen Clones, mit den Zugangsdaten des Rechners.
+
+Die Einrichtungsseite zeigt Remote, Branch und das Ergebnis des letzten Pull/Push (mit Fehlertext). `/healthz` ist ohne Anmeldung erreichbar und zeigt deshalb nur, ob Pull und Push zuletzt geklappt haben.
+
+## Docker
+
+Dateien: `Dockerfile`, `compose.yaml`, `.env.example`, `vaultserver.kunde.example.toml`.
+
+```
+cp .env.example .env                                  # Ports, Pfade, VS_GIT_TOKEN
+cp vaultserver.kunde.example.toml vaultserver.toml    # [git] url, branch, committer
+docker compose up -d --build
+docker compose logs -f
+docker compose exec vaultserver vaultserver -c /config/vaultserver.toml hash-password   # erster Web-Benutzer
+```
+
+- Im Container gelten feste Pfade: Vault `/vault`, Daten `/data` (Index, MCP-Zugänge, Web-Benutzer, Sitzungsschlüssel), Konfiguration `/config/vaultserver.toml` (nur lesend).
+- `data/` sichern: dort liegen Zugänge und Benutzer. Den Vault sichert das Git-Repo.
+- Mehrere Kunden auf einem Rechner: je Kunde ein eigener Ordner mit `.env`, `vaultserver.toml`, `data/`, `vault/` und eigenem Port, gestartet mit `docker compose -p <kunde> up -d`.
+- Update: `git pull && docker compose up -d --build`.
+- Nie zwei Server auf denselben Vault-Ordner schreiben lassen (vorher `systemctl --user disable --now vaultserver`).
+
 ## Einen Rechner anbinden
 
 Jeder Rechner hat ein eigenes Token; der Name vor dem Token erscheint als Autor der Commits (`ubuntu1/claude-code: …`). Die fertigen Befehle je Rechner stehen in `data/clients.md`.

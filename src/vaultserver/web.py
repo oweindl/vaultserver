@@ -21,6 +21,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from .config import Config
+from .gitops import ensure_vault
 from .index import Index
 from .mcp_server import build_mcp
 from .render import render
@@ -118,7 +119,19 @@ def read_session(cookie: str, key: bytes, users: Users) -> str | None:
 
 # ------------------------------------------------------------------ Anwendung
 
+def git_info(config: Config, svc: Service) -> dict:
+    """Remote (ohne Zugangsdaten), Branch und letzter Pull/Push des Vault-Repos."""
+    git = svc.store.git
+    if not git.enabled:
+        return {"enabled": False}
+    return {"enabled": True, "remote": git.remote_url(config.git_remote), "branch": git.current_branch(),
+            "push": config.git_push, **svc.store.git_status}
+
+
 def create_app(config: Config, start_background: bool = True) -> FastAPI:
+    done = ensure_vault(config)
+    if done:
+        log.info("Vault %s", done)
     svc = Service(config)
     mcp = build_mcp(svc)
     mcp_app = mcp.streamable_http_app(
@@ -274,6 +287,7 @@ def create_app(config: Config, start_background: bool = True) -> FastAPI:
             "areas": [a.name for a in config.areas],
             "vault": config.vault_path.name,
             "git_push": config.git_push,
+            "git": git_info(config, svc),
         }
 
     @app.post("/api/clients")
@@ -658,7 +672,10 @@ def create_app(config: Config, start_background: bool = True) -> FastAPI:
 
     @app.get("/healthz")
     def health():
-        return {"ok": True, "notes": svc.index.stats()["notes"], "last_error": svc.last_error}
+        st = svc.store.git_status
+        # ohne Anmeldung: nur ob Pull/Push zuletzt geklappt haben, kein Remote, keine Fehlertexte
+        git = {k: (v["ok"] if v else None) for k, v in st.items()}
+        return {"ok": True, "notes": svc.index.stats()["notes"], "last_error": svc.last_error, "git": git}
 
     @app.get("/favicon.ico", include_in_schema=False)
     def favicon():

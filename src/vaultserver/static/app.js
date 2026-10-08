@@ -850,6 +850,10 @@ async function showHome() {
 
 
 // ------------------------------------------------------------------ Einrichtung (MCP-Zugänge, Projekte, Anleitungen)
+const gitState = (label, r) => !r ? `${label}: noch nicht` : r.ok ? `${label}: ok (${esc(r.at)})`
+  : `${label}: <span style="color: var(--warn)">Fehler (${esc(r.at)}): ${esc(r.error)}</span>`;
+const gitLine = (g) => !g || !g.enabled ? "kein Git-Repo"
+  : `<code>${esc(g.remote || "ohne Remote")}</code> · Branch <code>${esc(g.branch)}</code> · ${gitState("Pull", g.pull)} · ${g.push ? gitState("Push", g.push) : "Push aus"}`;
 
 function copyText(text) {
   // navigator.clipboard gibt es nur in sicheren Kontexten (HTTPS/localhost); im LAN über HTTP der alte Weg
@@ -935,6 +939,7 @@ async function showSetup() {
       <tr><th>Anmeldung</th><td>Kopfzeile <code>Authorization: Bearer &lt;Token&gt;</code>, ein Token je Rechner (siehe 3)</td></tr>
       <tr><th>Optional</th><td>Kopfzeile <code>X-VaultServer-Agent: &lt;Werkzeug&gt;</code> – zweiter Teil des Autors in Commits (Standard <code>claude-code</code>)</td></tr>
       <tr><th>Vault</th><td><code>${esc(d.vault)}</code> · Bereiche mit Regeln: ${d.areas.map((a) => `<code>${esc(a)}</code>`).join(", ") || "–"} · Push nach jeder Änderung: ${d.git_push ? "ja" : "nein"}</td></tr>
+      <tr><th>Git</th><td>${gitLine(d.git)}</td></tr>
     </table>
     ${location.protocol === "http:" ? `<div class="banner info">Der Server spricht HTTP ohne TLS – gedacht fürs LAN. Tokens nicht über fremde Netze schicken.</div>` : ""}
 

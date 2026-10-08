@@ -7,6 +7,7 @@ wird zwischen Threads geteilt).
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -23,7 +24,7 @@ from pathlib import Path, PurePosixPath
 import yaml
 
 from .config import Area, Config
-from .gitops import Git
+from .gitops import Git, vault_git
 from .index import Index, norm_key
 from .parser import MDLINK_RE, WIKILINK_RE, parse_note
 
@@ -127,7 +128,9 @@ class Store:
     def __init__(self, config: Config, index: Index | None = None):
         self.config = config
         self.index = index or Index(config)
-        self.git = Git(config.vault_path)
+        self.git = vault_git(config)
+        # Ergebnis des letzten Pull/Push für Anzeige und /healthz
+        self.git_status: dict[str, dict | None] = {"pull": None, "push": None}
         self.lock = threading.RLock()
         # Version -> Text früherer Stände, für Abschnitts-Patches gegen ältere Versionen
         self._history: OrderedDict[str, str] = OrderedDict()
@@ -1094,12 +1097,23 @@ class Store:
 
     # ------------------------------------------------------------ Git-Abgleich
 
+    @contextlib.contextmanager
+    def _track(self, what: str):
+        at = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+        try:
+            yield
+        except Exception as e:
+            self.git_status[what] = {"ok": False, "at": at, "error": self.git.redact(str(e))[:500]}
+            raise
+        self.git_status[what] = {"ok": True, "at": at}
+
     def pull(self) -> dict:
         with self.lock:
             if not self.git.enabled or not self.config.git_pull_seconds:
                 return {"pulled": False}
             before = self.git.head()
-            self.git.pull(self.config.git_remote, self.config.git_branch)
+            with self._track("pull"):
+                self.git.pull(self.config.git_remote, self.config.git_branch)
             after = self.git.head()
             st = self.index.sync() if before != after else None
             if st:
@@ -1119,7 +1133,8 @@ class Store:
                 self.git.pull(self.config.git_remote, self.config.git_branch)
             except Exception:
                 pass
-            self.git.push(self.config.git_remote, self.config.git_branch)
+            with self._track("push"):
+                self.git.push(self.config.git_remote, self.config.git_branch)
             self.dirty_push = False
             self.index.sync()
             return {"pushed": True}

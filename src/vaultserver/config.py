@@ -66,6 +66,10 @@ class Config:
     git_push: bool = False
     git_remote: str = "origin"
     git_branch: str = ""                # leer = aktueller Branch
+    git_url: str = ""                   # Vault-Repo (HTTPS); gesetzt = klonen, wenn vault_path leer, sonst origin prüfen
+    git_username: str = "x-access-token"  # Benutzername zum Token (GitHub: x-access-token, GitLab: oauth2)
+    git_token_env: str = "VS_GIT_TOKEN"   # Umgebungsvariable mit dem Token (nie in der toml)
+    git_committer: str = ""             # "Name <adresse>", leer = VaultServer <vaultserver@Rechner>
     watch_seconds: float = 3.0          # Datei-Wächter, 0 = aus
     claim_minutes: int = 120
 
@@ -123,6 +127,10 @@ class Config:
             git_push=git.get("push", False),
             git_remote=git.get("remote", "origin"),
             git_branch=git.get("branch", ""),
+            git_url=git.get("url", ""),
+            git_username=git.get("username", "x-access-token"),
+            git_token_env=git.get("token_env", "VS_GIT_TOKEN"),
+            git_committer=git.get("committer", ""),
             watch_seconds=server.get("watch_seconds", 3.0),
             claim_minutes=server.get("claim_minutes", 120),
             code_repos=[{**r, "path": str((base / r["path"]).expanduser().resolve())}

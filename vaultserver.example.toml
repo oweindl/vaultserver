@@ -28,6 +28,13 @@ commit = true              # jede Änderung ein Commit
 pull_seconds = 60          # 0 = kein Pull
 push = true                # nach Änderungen zum Remote pushen
 remote = "origin"
+# branch = "main"           # leer = aktueller Branch
+# Vault aus einem eigenen Repo (z. B. beim Kunden): ist vault_path leer, klont VaultServer beim Start;
+# ist dort ein Repo mit anderem Remote oder Branch, startet er nicht. Token nur aus der Umgebung.
+# url = "https://github.com/kunde/vault.git"
+# username = "x-access-token"   # GitHub; GitLab: "oauth2"; Gitea: Benutzername
+# token_env = "VS_GIT_TOKEN"    # Name der Umgebungsvariable mit dem Token
+# committer = "VaultServer Kunde <vault@kunde.example>"   # leer = VaultServer <vaultserver@Rechner>
 
 [semantic]                 # Phase 6, braucht Ollama mit Embedding-Modell
 enabled = false

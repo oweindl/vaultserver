@@ -1,0 +1,41 @@
+# VaultServer für einen Kunden im Container (compose.yaml). Kopieren nach vaultserver.toml und anpassen.
+# Der Vault kommt aus dem Repo unter [git] url; das Token steht in .env (VS_GIT_TOKEN), nie hier.
+vault_path = "/vault"
+db_path = "/data/index.sqlite"
+
+archive_folders = ["Archiv"]
+exclude = [".git", ".obsidian", ".trash"]
+
+[server]
+host = "0.0.0.0"
+port = 8100
+watch_seconds = 3
+claim_minutes = 120
+# MCP-Zugänge und Web-Benutzer am besten über die Web-Einrichtung anlegen (liegen dann in /data).
+# Erster Web-Benutzer: docker compose exec vaultserver vaultserver hash-password, Ergebnis hier eintragen.
+[server.users]
+# admin = "scrypt$…"
+
+[git]
+url = "https://github.com/KUNDE/VAULT.git"
+branch = "main"
+username = "x-access-token"     # GitHub; GitLab: "oauth2"; Gitea: Benutzername
+committer = "VaultServer <vaultserver@kunde.example>"
+commit = true
+pull_seconds = 60
+push = true
+remote = "origin"
+
+[semantic]
+enabled = false
+ollama_url = "http://host.docker.internal:11434"
+model = "nomic-embed-text"
+
+[limits]
+soft_kb = 20
+hard_kb = 50
+folder_notes = 25
+max_upload_mb = 25
+
+# Bereiche mit Regeln (Pflichtfelder, erlaubte Werte, Nummern) je Kunde nach Bedarf, Beispiel in
+# vaultserver.example.toml ([[areas]], [canonical], [groups.status]).

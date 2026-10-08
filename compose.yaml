@@ -3,10 +3,11 @@
 #   docker compose logs -f
 #   docker compose exec vaultserver vaultserver -c /config/vaultserver.toml new-token
 #
-# Im Container gelten feste Pfade, vaultserver.toml muss sie verwenden:
-#   vault_path = "/vault"
+# Im Container gelten feste Pfade, vaultserver.toml muss sie verwenden
+# (Vorlage für Kunden: vaultserver.kunde.example.toml):
+#   vault_path = "/vault"   – leer lassen und [git] url setzen, dann klont VaultServer beim ersten Start
 #   db_path    = "/data/index.sqlite"
-#   [[code_repos]] path = "/repos/pdfcloud-pro"
+#   [[code_repos]] path = "/repos/code"   (optional)
 #   [semantic] ollama_url = "http://host.docker.internal:11434"
 services:
   vaultserver:
@@ -16,15 +17,15 @@ services:
     restart: unless-stopped
     user: "${UID:-1000}:${GID:-1000}"
     # Erscheint in der Commit-Adresse vaultserver@<hostname>
-    hostname: ${VS_HOSTNAME:-webtest}
+    hostname: ${VS_HOSTNAME:-vaultserver}
     ports:
       - "${VS_PORT:-8100}:8100"
     environment:
-      GIT_TOKEN: ${GIT_TOKEN:-}
+      VS_GIT_TOKEN: ${VS_GIT_TOKEN:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
       - ${VS_CONFIG:-./vaultserver.toml}:/config/vaultserver.toml:ro
       - ${VS_DATA:-./data}:/data
-      - ${VS_VAULT:?Pfad zum Vault in .env setzen}:/vault
-      - ${VS_CODE_REPO:-./data/empty}:/repos/pdfcloud-pro:ro
+      - ${VS_VAULT:-./vault}:/vault
+      - ${VS_CODE_REPO:-./data/empty}:/repos/code:ro

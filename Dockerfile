@@ -8,11 +8,9 @@ RUN apt-get update \
 
 # Der Container läuft mit der UID des Host-Benutzers (compose: user:), damit
 # Dateien und git-Objekte im Vault ihm gehören. git prüft den Besitzer des
-# Repos, das HOME gibt es für diese UID nicht – daher systemweite Einstellungen.
-# Zugang zu GitHub: HTTPS mit Token aus GIT_TOKEN (nur wenn gesetzt).
-RUN git config --system safe.directory '*' \
- && git config --system credential.helper \
-    '!f() { test -n "$GIT_TOKEN" || exit 0; echo username=x-access-token; echo "password=$GIT_TOKEN"; }; f'
+# Repos, das HOME gibt es für diese UID nicht – daher systemweit.
+# Zugang zum Vault-Repo: [git] url in der toml, Token aus VS_GIT_TOKEN (setzt VaultServer selbst).
+RUN git config --system safe.directory '*'
 
 WORKDIR /app
 COPY pyproject.toml README.md LICENSE ./

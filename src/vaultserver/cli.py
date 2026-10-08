@@ -131,7 +131,13 @@ def main(argv: list[str] | None = None) -> int:
         import uvicorn
         from .web import create_app
         logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-        uvicorn.run(create_app(config), host=args.host or config.host, port=args.port or config.port,
+        from .gitops import GitError
+        try:
+            app = create_app(config)
+        except GitError as e:
+            print(f"Vault: {e}", file=sys.stderr)
+            return 2
+        uvicorn.run(app, host=args.host or config.host, port=args.port or config.port,
                     log_level="info", access_log=False)
         return 0
     if args.cmd in ("lint", "overview", "link-commits", "changes", "embed"):
