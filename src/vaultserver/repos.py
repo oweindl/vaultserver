@@ -48,6 +48,15 @@ class Repo:
         return d
 
 
+def contains(g: Git, ancestor: str, rev: str) -> bool:
+    """True, wenn ancestor in rev enthalten ist."""
+    try:
+        g.run("merge-base", "--is-ancestor", ancestor, rev)
+        return True
+    except GitError:
+        return False
+
+
 def default_name(url: str) -> str:
     """Ordnername aus der Repo-Adresse: https://github.com/acme/Kunden-Vault.git -> kunden-vault."""
     last = repo_key(url).rsplit("/", 1)[-1]
@@ -250,6 +259,67 @@ class Repos:
                     raise ValueError("Branch wechseln geht nicht: es gibt noch nicht gepushte Commits")
                 g.switch_branch(self.config.git_remote, branch)
                 repo.branch = branch
+            self._save()
+            return repo
+
+    def set_url(self, name: str, url: str) -> Repo:
+        """Neue Adresse (z. B. Repo auf GitHub umbenannt oder umgezogen). Wird vorher geprüft; das Repo unter der
+        neuen Adresse muss den aktuellen Stand kennen, sonst wäre es ein anderes Repo."""
+        with self.lock:
+            repo = self.get(name)
+            if repo.source != "web":
+                raise ValueError("Dieses Repo steht in vaultserver.toml und lässt sich nur dort ändern")
+            url = self._check_url(url)
+            if repo_key(url) == repo_key(repo.url):
+                repo.url = url
+                self._save()
+                return repo
+            for r in self._repos.values():
+                if r.name != name and repo_key(r.url) == repo_key(url):
+                    raise ValueError(f"Diese Adresse ist schon als „{r.name}“ eingebunden")
+            g = self.git(name)
+            remote = self.config.git_remote
+            old = g.remote_url(remote)
+            ref = f"refs/remotes/{remote}/{repo.branch or g.current_branch()}"
+            known = g.run("rev-parse", "--verify", "-q", ref, check=False).strip()   # letzter bekannter Remote-Stand
+            g.run("remote", "set-url", remote, strip_credentials(url))
+            try:
+                probe = Git(self.folder(name), committer=repo.committer, url=url, token=self.token(repo),
+                            username=repo.username)
+                probe.run("fetch", "-q", remote)
+                now = g.run("rev-parse", "--verify", "-q", ref, check=False).strip()
+                same = bool(now) and (not known or contains(g, known, now))
+                if not same:
+                    raise ValueError("Unter der neuen Adresse fehlt der bisherige Stand – ist das wirklich dasselbe Repo?")
+            except Exception:
+                g.run("remote", "set-url", remote, old or strip_credentials(repo.url), check=False)
+                if known:
+                    g.run("update-ref", ref, known, check=False)   # Remote-Stand wie vorher
+                raise
+            repo.url = url
+            self._gits.pop(name, None)
+            self._save()
+            return repo
+
+    def rename(self, name: str, new: str) -> Repo:
+        """Ordner und Projektnamen ändern. Zugänge und offene Pushes stellt der Aufrufer um."""
+        with self.lock:
+            repo = self.get(name)
+            if repo.source != "web":
+                raise ValueError("Dieses Repo steht in vaultserver.toml und lässt sich nur dort ändern")
+            new = self._check_name(new)
+            src, dst = self.folder(name), self.folder(new)
+            self._root_exclude(add=new)
+            if src.exists():
+                os.replace(src, dst)
+            self._root_exclude(remove=name)
+            del self._repos[name]
+            repo.name = new
+            self._repos[new] = repo
+            self._gits.pop(name, None)
+            if name in self.status:
+                self.status[new] = self.status.pop(name)
+            self._publish()
             self._save()
             return repo
 

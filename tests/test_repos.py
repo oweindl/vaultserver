@@ -278,3 +278,80 @@ def test_unterordner_als_eigene_vaults(env):
         assert r.status_code == 200 and r.json()["vaults"] == []
         assert call(c, "guide", url="/mcp/kunde/technik")[0] == 404
         assert call(c, "guide", url="/mcp/kunde")[0] == 200
+
+
+def test_umbenennen_und_adresse_aendern(env):
+    app = create_app(env["cfg"], start_background=False)
+    with TestClient(app) as c:
+        login(c)
+        assert c.post("/api/repos", json={"url": f"file://{env['acme']}", "split": True}).status_code == 200
+        tok = c.post("/api/clients", json={"name": "kunde-pc", "project": "acme/doku"}).json()["token"]
+        r = c.put("/api/repos/acme", json={"new_name": "acme-gmbh"})
+        assert r.status_code == 200, r.text
+        assert r.json()["name"] == "acme-gmbh" and r.json()["vaults"] == ["acme-gmbh/doku"]
+        assert (env["vault"] / "acme-gmbh" / ".git").is_dir() and not (env["vault"] / "acme").exists()
+        assert "/acme-gmbh/" in (env["vault"] / ".git" / "info" / "exclude").read_text()
+        assert "acme" not in git(env["vault"], "status", "--porcelain")
+        # Zugang folgt dem neuen Namen
+        t = TestClient(app)
+        _, hits = call(t, "search", {"text": "Schritt"}, url="/mcp", token=tok)
+        assert [h["path"] for h in hits] == ["Anleitung.md"]
+        assert call(c, "guide", url="/mcp/acme")[0] == 404
+        # Adresse: dasselbe Repo an anderer Stelle geht, ein fremdes Repo nicht
+        moved = env["tmp"] / "acme-umgezogen.git"
+        git(env["tmp"], "clone", "-q", "--bare", str(env["acme"]), str(moved))
+        r = c.put("/api/repos/acme-gmbh", json={"url": f"file://{moved}"})
+        assert r.status_code == 200, r.text
+        assert r.json()["url"] == f"file://{moved}"
+        assert git(env["vault"] / "acme-gmbh", "remote", "get-url", "origin").strip() == f"file://{moved}"
+        r = c.put("/api/repos/acme-gmbh", json={"url": f"file://{env['beta']}"})
+        assert r.status_code == 400 and "dasselbe Repo" in r.json()["error"]
+        assert git(env["vault"] / "acme-gmbh", "remote", "get-url", "origin").strip() == f"file://{moved}"
+        assert git(env["vault"] / "acme-gmbh", "rev-parse", "origin/main") == git(moved, "rev-parse", "main")
+        # Name schon vergeben
+        (env["vault"] / "belegt").mkdir()
+        assert c.put("/api/repos/acme-gmbh", json={"new_name": "belegt"}).status_code == 400
+
+
+def test_export_import_auf_zweiten_server(env, tmp_path_factory):
+    app = create_app(env["cfg"], start_background=False)
+    with TestClient(app) as c:
+        login(c)
+        assert c.post("/api/repos", json={"url": f"file://{env['acme']}", "token": TOKEN, "split": True}).status_code == 200
+        tok = c.post("/api/clients", json={"name": "laptop", "project": "acme"}).json()["token"]
+        assert c.post("/api/config/export", json={"passphrase": "kurz"}).status_code == 400
+        r = c.post("/api/config/export", json={"parts": ["repos", "clients", "users"], "passphrase": "lange-passphrase-1"})
+        assert r.status_code == 200 and "attachment" in r.headers["content-disposition"]
+        assert TOKEN not in r.text and tok not in r.text
+        exported = r.json()
+        plain = c.post("/api/config/export", json={"parts": ["repos"]}).json()
+        assert "token_sealed" not in plain["repos"][0] and "clients" not in plain
+
+    # zweiter Server: leerer Vault, eigener Datenordner, kein Benutzer außer dem Admin
+    t2 = tmp_path_factory.mktemp("zweiter")
+    (t2 / "vault").mkdir()
+    cfg2 = Config(vault_path=t2 / "vault", db_path=t2 / "data" / "idx.sqlite",
+                  users={"admin": hash_password("admin-passwort")}, git_commit=True, git_pull_seconds=0,
+                  watch_seconds=0, repo_schemes=["https", "file"])
+    app2 = create_app(cfg2, start_background=False)
+    with TestClient(app2) as c2:
+        assert c2.post("/api/login", json={"user": "admin", "password": "admin-passwort"}).status_code == 200
+        assert c2.post("/api/config/import", json={"data": {"format": "x"}}).status_code == 400
+        bad = c2.post("/api/config/import", json={"data": exported, "passphrase": "falsch-falsch-falsch"})
+        assert bad.status_code == 400 and "Passphrase" in bad.json()["message"]
+        prev = c2.post("/api/config/import", json={"data": exported, "passphrase": "lange-passphrase-1"}).json()
+        assert prev["dry_run"] and prev["passphrase_ok"]
+        assert {(x["part"], x["name"]) for x in prev["report"]} == {("repos", "acme"), ("clients", "laptop"), ("users", "oliver")}
+        assert not (t2 / "vault" / "acme").exists()          # Vorschau ändert nichts
+        res = c2.post("/api/config/import", json={"data": exported, "passphrase": "lange-passphrase-1",
+                                                  "dry_run": False}).json()
+        assert all(x["ok"] for x in res["report"]), res
+        repo = c2.get("/api/repos").json()["repos"][0]
+        assert repo["name"] == "acme" and repo["split"] and repo["has_token"] and repo["cloned"]
+        # Rechner behält seinen Token, Benutzer sein Passwort
+        _, hits = call(TestClient(app2), "search", {"text": "Kundenwissen"}, url="/mcp", token=tok)
+        assert [h["path"] for h in hits] == ["Start.md"]
+        assert c2.post("/api/login", json={"user": "oliver", "password": "altes-passwort"}).status_code == 200
+        # zweiter Import: alles schon da
+        again = c2.post("/api/config/import", json={"data": exported, "dry_run": False}).json()
+        assert all("schon" in x["result"] for x in again["report"])

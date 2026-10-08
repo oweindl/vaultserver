@@ -957,8 +957,9 @@ function repoDialog(existing = null) {
   form.innerHTML = `<h3>${edit ? `Repo „${esc(e.name)}“ ändern` : "Repository einbinden"}</h3>
     <p class="hp">Das Repo wird als Ordner der obersten Ebene in den Vault geklont und ist damit ein eigenes Projekt
       (MCP-Adresse <code>/mcp/&lt;name&gt;</code>). Änderungen werden dort committet und gepusht.</p>
-    <div class="row"><label for="r-url">Adresse (HTTPS) *</label><input type="text" id="r-url" value="${esc(e.url || "")}" placeholder="https://github.com/kunde/vault.git" ${edit ? "disabled" : ""}></div>
-    <div class="row"><label for="r-name">Name (Ordner und Projekt) *</label><input type="text" id="r-name" value="${esc(e.name || "")}" placeholder="kunde-vault" ${edit ? "disabled" : ""}></div>
+    <div class="row"><label for="r-url">Adresse (HTTPS) *</label><input type="text" id="r-url" value="${esc(e.url || "")}" placeholder="https://github.com/kunde/vault.git"></div>
+    <div class="row"><label for="r-name">Name (Ordner und Projekt) *</label><input type="text" id="r-name" value="${esc(e.name || "")}" placeholder="kunde-vault"></div>
+    ${edit ? `<p class="hp">Neue Adresse: nur für dasselbe Repo an anderer Stelle (umbenannt, umgezogen) – wird vorher geprüft. Neuer Name: Ordner und MCP-Adresse ändern sich, auf das Repo beschränkte Zugänge werden umgestellt; Rechner mit der alten Adresse in ihrer Einrichtung müssen sie anpassen.</p>` : ""}
     <div class="row"><label for="r-user">Benutzername zum Token</label><input type="text" id="r-user" value="${esc(e.username || "x-access-token")}"></div>
     <div class="row"><label for="r-token">Token${edit ? " (leer lassen = unverändert)" : ""}</label><input type="password" id="r-token" autocomplete="off"></div>
     <p class="hp">GitHub: fine-grained Token nur für dieses Repo, „Contents: Read and write“, Benutzername <code>x-access-token</code>. GitLab: Projekt-Token mit <code>write_repository</code>, Benutzername <code>oauth2</code>. Das Token wird verschlüsselt gespeichert und nie wieder angezeigt.</p>
@@ -992,14 +993,54 @@ function repoDialog(existing = null) {
     if (tok) body.token = tok;
     $("#r-ok").disabled = true; msg(edit ? "speichere …" : "klone … (kann bei großen Repos dauern)");
     try {
-      if (edit) await api("PUT", `/api/repos/${enc(e.name)}`, body);
+      if (edit) {
+        if (url.value.trim() !== e.url) body.url = url.value.trim();
+        if (name.value.trim() !== e.name) body.new_name = name.value.trim();
+        await api("PUT", `/api/repos/${enc(e.name)}`, body);
+      }
       else await api("POST", "/api/repos", { ...body, url: url.value.trim(), name: name.value.trim() });
-      dlg.close("done"); toast(edit ? `„${e.name}“ gespeichert` : `„${name.value.trim()}“ eingebunden`);
+      dlg.close("done"); toast(edit ? `„${name.value.trim()}“ gespeichert` : `„${name.value.trim()}“ eingebunden`);
       await loadTree(); showSetup();
     } catch (err) { msg(String(err.message || err), true); $("#r-ok").disabled = false; }
   };
   dlg.onclose = () => { form.innerHTML = ""; };
   dlg.returnValue = ""; dlg.showModal(); (edit ? $("#r-token") : url).focus();
+}
+
+function wireConfigTransfer() {
+  const picked = (cls) => [...document.querySelectorAll(`.${cls}:checked`)].map((x) => x.value);
+  $("#btn-cfg-export").onclick = async () => {
+    try {
+      const out = await api("POST", "/api/config/export", { parts: picked("cfg-ex"), passphrase: $("#cfg-ex-pass").value });
+      const stamp = new Date().toISOString().slice(0, 16).replace(/[-:T]/g, "");
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(new Blob([JSON.stringify(out, null, 2)], { type: "application/json" }));
+      a.download = `vaultserver-config-${stamp}.json`; document.body.append(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+      toast(`Exportiert: ${out.parts.join(", ")}${out.kdf ? " (mit Repo-Tokens)" : ""}`);
+    } catch (e) { fail(e); }
+  };
+  let loaded = null;
+  const run = async (dry) => {
+    const f = $("#cfg-file").files[0];
+    if (!f) return toast("Erst eine Datei wählen");
+    try { loaded = JSON.parse(await f.text()); } catch { return toast("Datei ist kein gültiges JSON"); }
+    const box = $("#cfg-report");
+    box.innerHTML = dry ? "prüfe …" : "importiere … (Repos werden geklont)";
+    try {
+      const r = await api("POST", "/api/config/import", { data: loaded, parts: picked("cfg-im"),
+        passphrase: $("#cfg-im-pass").value, dry_run: dry });
+      const label = { repos: "Repo", clients: "Zugang", users: "Benutzer" };
+      box.innerHTML = `<p><b>${dry ? "Vorschau" : "Ergebnis"}</b>${r.has_tokens && !r.passphrase_ok ? " · <span style=\"color: var(--warn)\">Datei enthält Repo-Tokens – ohne Passphrase werden sie nicht übernommen</span>" : ""}</p>
+        <table class="list">${r.report.map((x) => `<tr><td>${label[x.part]}</td><td><b>${esc(x.name)}</b></td>
+          <td${x.ok ? "" : ' style="color: var(--warn)"'}>${esc(x.result)}</td></tr>`).join("") || "<tr><td>Nichts zu übernehmen.</td></tr>"}</table>`;
+      $("#btn-cfg-import").disabled = !dry || !r.report.length;
+      if (!dry) { await loadTree(); toast("Import abgeschlossen"); setTimeout(showSetup, 2500); }
+    } catch (e) { box.innerHTML = ""; fail(e); }
+  };
+  $("#btn-cfg-check").onclick = () => run(true);
+  $("#btn-cfg-import").onclick = () => { if (confirm("Jetzt importieren?")) run(false); };
+  $("#cfg-file").onchange = () => { $("#btn-cfg-import").disabled = true; $("#cfg-report").innerHTML = ""; };
 }
 
 async function showSetup() {
@@ -1035,6 +1076,26 @@ async function showSetup() {
     </table>
     <p><button class="primary" id="btn-new-repo">Repository einbinden …</button>
       <span class="hp">Erlaubt: ${rp.schemes.map((x) => `<code>${esc(x)}://</code>`).join(", ")}. Repos aus <code>[[repos]]</code> in <code>vaultserver.toml</code> erscheinen hier nur lesend.</span></p>
+
+    <h3>Konfiguration sichern und übertragen</h3>
+    <p>Exportiert, was in der Oberfläche eingerichtet wurde, als JSON-Datei – zum Sichern oder um einen zweiten Server (z. B. im Container) gleich einzurichten. Was in <code>vaultserver.toml</code> steht, gehört nicht dazu.</p>
+    <div class="cfg-box">
+      <p><b>Export</b> ·
+        <label><input type="checkbox" class="cfg-ex" value="repos" checked> Repositories</label>
+        <label><input type="checkbox" class="cfg-ex" value="clients" checked> Zugänge (Rechner behalten ihre Tokens)</label>
+        <label><input type="checkbox" class="cfg-ex" value="users"> Web-Benutzer</label></p>
+      <p><label>Passphrase für Repo-Tokens (optional, mind. 10 Zeichen): <input type="password" id="cfg-ex-pass" autocomplete="new-password"></label>
+        <button id="btn-cfg-export">Exportieren …</button></p>
+      <p class="hp">Ohne Passphrase enthält die Datei keine Repo-Tokens (beim Import neu eingeben). Zugänge und Benutzer stehen nur als Hash darin, trotzdem die Datei wie ein Passwort behandeln.</p>
+      <p><b>Import</b> · <input type="file" id="cfg-file" accept=".json,application/json">
+        <label><input type="checkbox" class="cfg-im" value="repos" checked> Repositories</label>
+        <label><input type="checkbox" class="cfg-im" value="clients" checked> Zugänge</label>
+        <label><input type="checkbox" class="cfg-im" value="users" checked> Web-Benutzer</label></p>
+      <p><label>Passphrase: <input type="password" id="cfg-im-pass" autocomplete="off"></label>
+        <button id="btn-cfg-check">Prüfen</button> <button class="primary" id="btn-cfg-import" disabled>Importieren</button></p>
+      <p class="hp">Import ergänzt nur, was es hier noch nicht gibt; Vorhandenes bleibt unverändert. Repos werden dabei geklont.</p>
+      <div id="cfg-report"></div>
+    </div>
 
     <h3>2 · Projekte</h3>
     <p>Über die Projekt-Adresse sehen alle Werkzeuge nur diesen Ordner: Suche, Liste, Änderungen, Prüfung und <code>guide</code> beziehen sich nur auf das Projekt, Pfade sind <b>relativ</b> zum Projektordner (<code>Fixliste/FIX-001.md</code>), Schreiben außerhalb wird abgelehnt. <code>guide</code> nennt die Einstiegsnotiz des Projekts.</p>
@@ -1103,6 +1164,7 @@ async function showSetup() {
   };
   $("#btn-new-client").onclick = () => newClient(d.projects);
   $("#btn-new-repo").onclick = () => repoDialog();
+  wireConfigTransfer();
   const rs = $("#btn-root-sync");
   if (rs) rs.onclick = async () => {
     rs.disabled = true; rs.textContent = "…";

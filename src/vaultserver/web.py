@@ -11,6 +11,7 @@ import json
 import logging
 import mimetypes
 import os
+import re
 import secrets
 import time
 from pathlib import Path, PurePosixPath
@@ -23,6 +24,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from .config import Config
 from .gitops import ensure_vault
 from .secretbox import server_secret
+from .transfer import PARTS, export_config, import_config
 from .index import Index
 from .mcp_server import build_mcp
 from .render import render
@@ -84,6 +86,20 @@ class Users:
     def set(self, user: str, password: str) -> None:
         data = self._overrides()
         data[user] = hash_password(password)
+        tmp = self.file.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        tmp.chmod(0o600)
+        tmp.replace(self.file)
+
+    def all(self) -> dict[str, str]:
+        """Benutzer -> Hash (Konfiguration, überschrieben durch data/users.json)."""
+        return {**self.base, **self._overrides()}
+
+    def set_hash(self, user: str, stored: str) -> None:
+        if not re.fullmatch(r"[A-Za-z0-9._-]{1,40}", user or "") or not (stored or "").startswith("scrypt$"):
+            raise ValueError("ungültiger Benutzer-Eintrag")
+        data = self._overrides()
+        data[user] = stored
         tmp = self.file.with_suffix(".tmp")
         tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
         tmp.chmod(0o600)
@@ -374,11 +390,24 @@ def create_app(config: Config, start_background: bool = True) -> FastAPI:
             return only_web()
         if data.get("branch"):
             push_pending(name)
+        new_name = (data.get("new_name") or "").strip()
         try:
             r = svc.repos.update(name, token=data.get("token"), branch=data.get("branch"),
                                  username=data.get("username"), committer=data.get("committer"),
                                  push=data.get("push"), pull_seconds=data.get("pull_seconds"),
                                  split=data.get("split"))
+            if data.get("url"):
+                r = svc.repos.set_url(name, data["url"])
+            if new_name and new_name != name:
+                with svc.lock:
+                    r = svc.repos.rename(name, new_name)
+                    if name in svc.store.dirty:
+                        svc.store.dirty.discard(name)
+                        svc.store.dirty.add(new_name)
+                    svc.index.db.execute("DELETE FROM claims WHERE path LIKE ?", (name + "/%",))
+                moved = svc.clients.rename_project(name, new_name)
+                log.info("Repo umbenannt: %s -> %s (%d Zugänge umgestellt, von %s)", name, new_name, moved,
+                         web_user(request))
         except Exception as e:  # noqa: BLE001
             return repo_err(e)
         with svc.lock:
@@ -421,6 +450,39 @@ def create_app(config: Config, start_background: bool = True) -> FastAPI:
         svc.store.dirty.discard(name)
         svc.feed.publish(["."], "Repo entfernt", tree=True)
         log.info("Repo entfernt: %s (von %s)", name, web_user(request))
+        return out
+
+    # -------------------------------------------------------------- Einrichtung: Konfiguration sichern/übertragen
+
+    @app.post("/api/config/export")
+    def config_export(request: Request, data: dict = Body(default={})):
+        if not web_user(request):
+            return only_web()
+        try:
+            out = export_config(svc, users, data.get("parts") or list(PARTS), data.get("passphrase", ""))
+        except ValueError as e:
+            return err(e)
+        log.info("Konfiguration exportiert: %s (von %s)", ", ".join(out["parts"]), web_user(request))
+        name = f"vaultserver-config-{time.strftime('%Y%m%d-%H%M')}.json"
+        return JSONResponse(out, headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+    @app.post("/api/config/import")
+    def config_import(request: Request, data: dict = Body(...)):
+        if not web_user(request):
+            return only_web()
+        dry = bool(data.get("dry_run", True))
+        try:
+            out = import_config(svc, users, data.get("data"), data.get("parts") or list(PARTS),
+                                data.get("passphrase", ""), dry_run=dry, agent=f"web/{web_user(request)}")
+        except (ValueError, KeyError, TypeError) as e:
+            return err(e)
+        if not dry:
+            with svc.lock:
+                svc.index.sync()
+            svc.store.ensure_bin()
+            svc.feed.publish(["."], "Konfiguration importiert", tree=True)
+            log.info("Konfiguration importiert (von %s): %s", web_user(request),
+                     "; ".join(f"{r['part']}/{r['name']}: {r['result']}" for r in out["report"]))
         return out
 
     @app.post("/api/clients")

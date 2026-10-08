@@ -131,6 +131,41 @@ class Clients:
             self._save()
         return {**entry, "project": project or None}
 
+    def rename_project(self, old: str, new: str) -> int:
+        """Bindungen an ein umbenanntes Projekt (auch Unter-Vaults old/…) nachziehen. Gibt die Anzahl zurück."""
+        n = 0
+        with self._lock:
+            for cid, p in list(self._data["projects"].items()):
+                if p == old or p.startswith(old + "/"):
+                    self._data["projects"][cid] = new + p[len(old):]
+                    n += 1
+            if n:
+                self._save()
+        return n
+
+    def export(self) -> list[dict]:
+        """Im Web angelegte Zugänge mit Hash (nie Klartext) und Projektbindung."""
+        with self._lock:
+            return [{"name": t["name"], "hash": t["hash"], "created": t["created"],
+                     "project": self._data["projects"].get(t["hash"][:12])} for t in self._data["tokens"]]
+
+    def import_entry(self, name: str, hash_: str, created: float | None = None, project: str | None = None) -> str:
+        """Zugang aus einem Export übernehmen; der Rechner behält seinen Token. Gibt das Ergebnis als Text."""
+        if not NAME_RE.match(name or "") or not re.fullmatch(r"[0-9a-f]{64}", hash_ or ""):
+            raise ValueError("ungültiger Eintrag")
+        with self._lock:
+            if any(t["hash"] == hash_ for t in self._data["tokens"]) or any(
+                    _sha(tok) == hash_ for tok in self.config.tokens):
+                return "gibt es schon"
+            if any(t["name"].lower() == name.lower() for t in self._data["tokens"]) or any(
+                    n.lower() == name.lower() for n in self.config.tokens.values()):
+                return "Name gibt es schon"
+            self._data["tokens"].append({"name": name, "hash": hash_, "created": created or time.time()})
+            if project:
+                self._data["projects"][hash_[:12]] = project
+            self._save()
+        return "übernommen"
+
     def revoke(self, cid: str) -> str:
         """Sperrt einen Zugang; liefert den Namen."""
         with self._lock:

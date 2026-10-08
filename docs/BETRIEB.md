@@ -63,6 +63,7 @@ Neben dem Vault selbst kann der Server beliebig viele weitere Git-Repos anbieten
 - Branch wechseln geht nur ohne nicht committete Änderungen; offene Commits werden vorher gepusht.
 - Entfernen verschiebt den Ordner nach `data/removed-repos/<name>-<Zeit>` (nichts geht verloren). Gibt es nicht gepushte Commits oder Änderungen, fragt die Oberfläche nach.
 - Ein eingebundener Ordner lässt sich nicht löschen oder verschieben (nur über die Einrichtung).
+- **Ändern** kann auch Adresse und Name: eine neue Adresse nur für dasselbe Repo an anderer Stelle (umbenannt/umgezogen; geprüft wird, ob der bisherige Stand dort vorhanden ist, sonst bleibt alles wie vorher). Ein neuer Name verschiebt den Ordner und ändert die MCP-Adresse; auf das Repo (oder einen Unter-Vault) beschränkte Zugänge werden umgestellt.
 
 **Unterordner als eigene Vaults** (Häkchen im Dialog, in der toml `split = true`): Standard ist ein Vault je Repo (`/mcp/<name>`). Mit Aufteilung ist zusätzlich jeder Ordner der obersten Ebene im Repo ein eigener Vault `/mcp/<name>/<ordner>` – eigene Auswahl in der Oberfläche, relative Pfade, Zugänge lassen sich auf genau einen Unter-Vault beschränken, optionale `_Regeln.md` je Unterordner. So wie die Ordner im Stamm-Vault. `/mcp/<name>` bleibt als Adresse für das ganze Repo. Neue Ordner (auch per Pull) werden sofort zu Vaults. Git bleibt ein Repo (ein Klon, gemeinsame Commits, Pull/Push und Papierkorb).
 
@@ -79,6 +80,14 @@ pull_seconds = 60
 split = false                       # true: jeder Ordner der obersten Ebene ist ein eigener Vault /mcp/acme/<ordner>
 # Token aus der Umgebung, Standard VS_GIT_TOKEN_<NAME> (hier VS_GIT_TOKEN_ACME); anderer Name: token_env = "…"
 ```
+
+## Konfiguration exportieren und importieren
+
+Einrichtung › „Konfiguration sichern und übertragen“. Gilt für das, was in der Oberfläche eingerichtet wurde; `vaultserver.toml` gehört nicht dazu.
+
+- **Export** als JSON-Datei, wählbar: Repositories (Adresse, Branch, Commit-Kennung, Push, Abstand, Aufteilung), Zugänge (Name, Projektbindung, Token-Hash – Rechner behalten ihre Tokens), Web-Benutzer (Passwort-Hash). Repo-Tokens nur mit Passphrase (mind. 10 Zeichen), verschlüsselt mit einem per scrypt daraus abgeleiteten Schlüssel; ohne Passphrase fehlen sie und werden nach dem Import neu eingegeben. Die Datei trotzdem wie ein Passwort behandeln.
+- **Import**: Datei wählen, Teile wählen, Passphrase (falls Tokens enthalten), „Prüfen“ zeigt eine Vorschau, „Importieren“ übernimmt. Es wird nur ergänzt, was es noch nicht gibt (gleicher Name); Vorhandenes bleibt unverändert. Repos werden dabei geklont. Falsche Passphrase → Abbruch ohne Änderung.
+- Typischer Umzug: alter Server exportieren (alle Teile, mit Passphrase) → neuer Server (z. B. Container) mit eigenem ersten Benutzer starten → importieren. Rechner und Benutzer arbeiten danach ohne neue Tokens oder Passwörter weiter.
 
 ## Docker
 
