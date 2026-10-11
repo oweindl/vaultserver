@@ -4,27 +4,32 @@
 
 | Was | Wo |
 | --- | --- |
-| Dienst | systemd-Benutzerdienst `vaultserver` auf `webtest` (192.168.1.32), Port 8100 |
-| Code | `~/projects/vaultserver` (Repo `oweindl/vaultserver`) |
-| Konfiguration | `~/projects/vaultserver/vaultserver.toml` (nicht im Repo; Vorlage `vaultserver.example.toml`) |
-| Vault | `~/obsidian-oweindl` (Repo `oweindl/obsidian-oweindl`, privat) |
-| Index | `~/projects/vaultserver/data/index.sqlite`, jederzeit neu aufbaubar |
-| Zugangsdaten für die Rechner | `~/projects/vaultserver/data/clients.md` (nicht im Repo) |
+| Dienst | Docker-Container `vaultserver` auf `omv` (192.168.1.200), Port 8100, verwaltet in OMV unter Dienste › Compose › Dateien › `vaultserver` (seit 2026-10-09; vorher systemd-Dienst auf webtest, dort abgeschaltet) |
+| Image | `vaultserver:latest`, gebaut aus diesem Repo (`docker build`), per `docker save … \| ssh omv docker load` übertragen |
+| Daten auf omv | `/srv/dev-disk-by-uuid-1081ed32-7852-4494-b0ff-c586bbb2a951/appdata/vaultserver/` |
+| Konfiguration | `…/appdata/vaultserver/vaultserver.toml` (Container-Pfade `/vault`, `/data`; nicht im Repo; Vorlage `vaultserver.example.toml`) |
+| Vault | `…/appdata/vaultserver/vault` (Repo `oweindl/obsidian-oweindl`, privat) |
+| Index | `…/appdata/vaultserver/data/index.sqlite`, jederzeit neu aufbaubar |
+| Zugangsdaten für die Rechner | `…/appdata/vaultserver/data/clients.md` (nicht im Repo) |
 
-Git-Zugriff auf GitHub läuft über `gh` (`~/.local/bin/gh`, angemeldet als oweindl, HTTPS). Der SSH-Schlüssel des Rechners ist nur ein Deploy-Key für PDFCloud-Pro.
+Git-Zugriff auf GitHub: HTTPS mit einem Fine-grained-Token (nur `oweindl/obsidian-oweindl`, Contents read/write) in der Umgebung der Compose-Datei (`GIT_TOKEN`).
 
 ## Dienst
 
+Starten, stoppen und Protokoll in OMV unter Dienste › Compose › Dateien › `vaultserver` (Up/Down/Logs). Auf der Kommandozeile von omv (Benutzer in der Gruppe `docker`):
+
 ```
-systemctl --user status vaultserver
-systemctl --user restart vaultserver          # nach Änderungen an Code oder Konfiguration
-journalctl --user -u vaultserver -f           # Protokoll
-curl http://192.168.1.32:8100/healthz
+docker ps --filter name=vaultserver
+docker logs -f vaultserver
+docker restart vaultserver                     # nach Änderungen an vaultserver.toml
+curl http://omv.olwe.local:8100/healthz
 ```
 
-Der Dienst läuft ohne Anmeldung weiter, weil Linger für den Benutzer aktiv ist. Die Unit-Datei liegt in `deploy/vaultserver.service`.
+Neue Version: auf einem Rechner mit Repo `docker build -t vaultserver:latest .`, dann `docker save vaultserver:latest | gzip | ssh oweindl@omv.olwe.local 'gunzip | docker load'` und in OMV `vaultserver` neu starten (Up).
 
 Im Hintergrund prüft der Dienst alle 3 Sekunden, ob sich Dateien geändert haben, holt jede Minute Änderungen vom Git-Remote (`pull --rebase`) und pusht etwa 10 Sekunden nach jeder eigenen Änderung. Fehler im Hintergrund erscheinen im Protokoll und auf der Startseite der Web-Oberfläche.
+
+Es darf immer nur ein VaultServer in den Vault schreiben. Der alte Dienst auf webtest ist gestoppt und deaktiviert (`systemctl --user disable vaultserver`); nicht wieder einschalten.
 
 ## Vault aus einem Kunden-Repo
 
@@ -112,12 +117,12 @@ docker compose exec vaultserver vaultserver -c /config/vaultserver.toml hash-pas
 Jeder Rechner hat ein eigenes Token; der Name vor dem Token erscheint als Autor der Commits (`ubuntu1/claude-code: …`). Die fertigen Befehle je Rechner stehen in `data/clients.md`.
 
 ```
-claude mcp add --scope user --transport http vaultserver http://192.168.1.32:8100/mcp --header "Authorization: Bearer <token>"
+claude mcp add --scope user --transport http vaultserver http://omv.olwe.local:8100/mcp --header "Authorization: Bearer <token>"
 ```
 
 Danach den Block aus `deploy/CLAUDE-block.md` in `~/.claude/CLAUDE.md` des Rechners übernehmen. Er verweist die Agenten auf `guide` und die Arbeitsregeln. Das bisherige Obsidian-MCP (Local REST API) auf dem Rechner entfernen, damit Agenten nicht zwei Wege nutzen.
 
-Neues Token: `vaultserver new-token`, unter `[server.tokens]` eintragen, Dienst neu starten.
+Neues Token: `docker exec vaultserver vaultserver -c /config/vaultserver.toml new-token`, unter `[server.tokens]` eintragen, Container neu starten.
 
 ## Web-Anmeldung
 
@@ -153,7 +158,7 @@ Keine davon läuft automatisch. Die Commit-Verknüpfung würde beim ersten Lauf 
 
 ## Semantische Suche (Phase 6)
 
-Ausgeschaltet, weil auf `webtest` kein Ollama läuft. Zum Einschalten Ollama installieren, `ollama pull nomic-embed-text`, in der Konfiguration `[semantic] enabled = true` setzen und neu starten. Der Dienst berechnet fehlende Embeddings alle 5 Minuten; `search(mode="auto")` ergänzt dann Volltexttreffer um ähnliche Abschnitte.
+Ausgeschaltet, weil kein Ollama läuft. Zum Einschalten Ollama installieren, `ollama pull nomic-embed-text`, in der Konfiguration `[semantic] enabled = true` setzen und neu starten. Der Dienst berechnet fehlende Embeddings alle 5 Minuten; `search(mode="auto")` ergänzt dann Volltexttreffer um ähnliche Abschnitte.
 
 ## Prüfen und reparieren
 
