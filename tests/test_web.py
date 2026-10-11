@@ -96,3 +96,11 @@ def test_password_min_length_8(setup: Config):
         assert login(c, "altes-passwort") == 200
         assert c.post("/api/password", json={"old": "altes-passwort", "new": "acht8888"}).status_code == 200   # genau 8
         assert login(c, "acht8888") == 200
+
+
+def test_favicon_get_and_head_without_login(setup: Config):
+    """Browsersymbol ohne Anmeldung, auch für HEAD (curl -I) – im Container war es zuerst 404/405."""
+    with TestClient(create_app(setup, start_background=False)) as c:
+        for r in (c.get("/favicon.ico"), c.head("/favicon.ico")):
+            assert r.status_code == 200 and r.headers["content-type"] == "image/x-icon"
+        assert c.get("/static/icon-192.png").status_code == 200

@@ -889,7 +889,7 @@ def create_app(config: Config, start_background: bool = True) -> FastAPI:
         git = {k: (v["ok"] if v else None) for k, v in st.items()}
         return {"ok": True, "notes": svc.index.stats()["notes"], "last_error": svc.last_error, "git": git}
 
-    @app.get("/favicon.ico", include_in_schema=False)
+    @app.api_route("/favicon.ico", methods=["GET", "HEAD"], include_in_schema=False)
     def favicon():
         return FileResponse(STATIC / "favicon.ico", media_type="image/x-icon", headers={"Cache-Control": "max-age=86400"})
 
