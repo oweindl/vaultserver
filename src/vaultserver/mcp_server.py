@@ -87,6 +87,13 @@ def build_mcp(svc: Service) -> MCPServer:
     def path_in(sc: Scope, path: str) -> str:
         return st._norm_path(sc.full(path))
 
+    def seen(ctx: Context | None, path: str) -> None:
+        """Lesezugriff für die Aktivitätsanzeige melden (Pfad vault-absolut; Fehler hier nie an den Agenten)."""
+        try:
+            svc.feed.touch([path], agent_from(ctx, svc))
+        except Exception:  # noqa: BLE001
+            pass
+
     # ---------------------------------------------------------------- lesen
 
     @mcp.tool(annotations=RO)
@@ -165,8 +172,11 @@ def build_mcp(svc: Service) -> MCPServer:
         sc = scope_of(ctx)
 
         def run():
+            full = path_in(sc, path)
             with lock:
-                return sc.rel(ix.outline(path_in(sc, path)))
+                out = sc.rel(ix.outline(full))
+            seen(ctx, full)
+            return out
         return _guard(run)()
 
     @mcp.tool(annotations=RO)
@@ -176,7 +186,13 @@ def build_mcp(svc: Service) -> MCPServer:
         inkl. Unterabschnitte) oder Zeilenbereich. Liefert version für spätere Änderungen."""
         sc = scope_of(ctx)
         lines = (line_from or 1, line_to or 10**9) if (line_from or line_to) else None
-        return _guard(lambda: sc.rel(st.read_tracked(path_in(sc, path), section=section, lines=lines)))()
+
+        def run():
+            full = path_in(sc, path)
+            out = sc.rel(st.read_tracked(full, section=section, lines=lines))
+            seen(ctx, full)
+            return out
+        return _guard(run)()
 
     @mcp.tool(name="list", annotations=RO)
     def list_(folder: str = "", depth: int = 1, ctx: Context | None = None) -> dict[str, Any]:
@@ -184,8 +200,11 @@ def build_mcp(svc: Service) -> MCPServer:
         sc = scope_of(ctx)
 
         def run():
+            full = sc.full(folder, allow_root=True) if sc else folder
             with lock:
-                return sc.rel(ix.list(sc.full(folder, allow_root=True) if sc else folder, depth))
+                out = sc.rel(ix.list(full, depth))
+            seen(ctx, full)
+            return out
         return _guard(run)()
 
     @mcp.tool(annotations=RO)
@@ -194,8 +213,11 @@ def build_mcp(svc: Service) -> MCPServer:
         sc = scope_of(ctx)
 
         def run():
+            full = path_in(sc, path)
             with lock:
-                return sc.rel(sc.only(ix.backlinks(path_in(sc, path))))
+                out = sc.rel(sc.only(ix.backlinks(full)))
+            seen(ctx, full)
+            return out
         return _guard(run)()
 
     @mcp.tool(annotations=RO)
@@ -408,6 +430,7 @@ def build_mcp(svc: Service) -> MCPServer:
                 raise ValueError("Notizen mit read lesen")
             mime = mimetypes.guess_type(full)[0] or "application/octet-stream"
             size = f.stat().st_size
+            seen(ctx, full)
             info = {"path": sc.rel(full), "type": mime, "size": size}
             if mime in ("image/png", "image/jpeg", "image/gif", "image/webp"):
                 if size > 5 * 1024 * 1024:

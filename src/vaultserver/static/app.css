@@ -2,6 +2,7 @@
   --bg: #fbfaf8; --panel: #f3f1ed; --line: #e2ded6; --text: #23211d; --muted: #6f6a60;
   --accent: #3d6fb6; --accent-bg: #e6eef9; --warn: #a8551b; --warn-bg: #fbeee3; --ok: #2f7a4b;
   --code: #efece6; --mark: #fff0a8; --sel: #dde8f7;
+  --act-read: #17924a; --act-write: #d32f2f;
   --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
   --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
@@ -10,6 +11,7 @@
     --bg: #1c1d20; --panel: #232428; --line: #34363c; --text: #e6e3dc; --muted: #9a968d;
     --accent: #7aa6e8; --accent-bg: #23324a; --warn: #e3965a; --warn-bg: #3a2a1d; --ok: #6cc08b;
     --code: #2b2d32; --mark: #5a4b12; --sel: #2c3c57;
+    --act-read: #4fd486; --act-write: #ff6a6a;
   }
 }
 * { box-sizing: border-box; }
@@ -273,3 +275,27 @@ dialog.opt[open] { display: flex; flex-direction: column; }
 
 .logo { display: inline-flex; align-items: center; gap: 7px; }
 .logo img { width: 22px; height: 22px; flex: none; }
+
+/* Aktivität im Baum: Lauf-Animation über den Namen (grün = Lesen, rot = Änderung), Agent in Klammern */
+@property --act-a { syntax: "<percentage>"; inherits: true; initial-value: 100%; }
+.node { --nm: var(--text); }
+.node.att { --nm: var(--muted); }
+.node.active { --nm: var(--accent); }
+.node.act-read { --act: var(--act-read); }
+.node.act-write { --act: var(--act-write); }
+.node.act-read, .node.act-write { --act-a: 100%; transition: --act-a 1s ease-out; }
+.node.act-fade { --act-a: 0%; }
+.node.act-read .nm, .node.act-write .nm {
+  --hl: color-mix(in srgb, var(--act) var(--act-a), var(--nm));
+  background: linear-gradient(90deg, var(--nm) 0%, var(--nm) 25%, var(--hl) 42%, var(--hl) 58%, var(--nm) 75%, var(--nm) 100%);
+  background-size: 300% 100%; -webkit-background-clip: text; background-clip: text; color: transparent;
+  animation: act-run 1.2s linear infinite;
+  overflow: hidden; text-overflow: ellipsis;
+}
+.node .act-who { flex: none; font-size: 11px; color: color-mix(in srgb, var(--act) var(--act-a), var(--muted)); opacity: .9; }
+@keyframes act-run { from { background-position: 100% 0; } to { background-position: 0% 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .node.act-read .nm, .node.act-write .nm { animation: none; background: none; color: var(--hl); }
+}
+#btn-act { padding: 2px 7px; color: var(--muted); }
+#btn-act.on { color: var(--act-read); }

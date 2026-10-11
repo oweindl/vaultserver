@@ -108,6 +108,7 @@ function renderTree() {
         <option value="">all</option>${state.projects.map((p) => `<option value="${esc(p.folder)}" ${p.folder === state.vault ? "selected" : ""}>${esc(p.folder)}</option>`).join("")}
       </select>
       <button id="btn-new-vault" title="Neues Stammverzeichnis anlegen">+ Vault</button>
+      <button id="btn-act" class="${act.on ? "on" : ""}" title="Aktivitätsanzeige: grün = ein Agent liest, rot = Änderung – Klick schaltet ein/aus">◉</button>
     </div><div class="tree-body"></div>
     <div class="node bin" data-bin="1" title="Gelöschtes – wiederherstellbar"><span class="tw"></span><span class="ic">🗑</span><span>Papierkorb${state.binCount ? ` (${state.binCount})` : ""}</span></div>`;
   $("#vault-pick").onchange = (ev) => {
@@ -115,6 +116,7 @@ function renderTree() {
     if (!location.hash.startsWith("#/note/")) route();   // Listen neu filtern
   };
   $("#btn-new-vault").onclick = newVault;
+  $("#btn-act").onclick = toggleActivity;
   nav.querySelector(".node.bin").onclick = () => go("#/trash");
   const el = nav.querySelector(".tree-body");
   const walk = (node, parent) => {
@@ -122,13 +124,14 @@ function renderTree() {
       const open = state.open.has(d.path);
       const row = document.createElement("div");
       row.className = "node dir"; row.dataset.dir = d.path; row.draggable = true;
-      row.innerHTML = `<span class="tw">${open ? "▾" : "▸"}</span><span class="ic">📁</span><span>${esc(d.name)}</span>`;
+      row.innerHTML = `<span class="tw">${open ? "▾" : "▸"}</span><span class="ic">📁</span><span class="nm">${esc(d.name)}</span>`;
       const kids = document.createElement("div"); kids.className = "children" + (open ? "" : " closed");
       row.onclick = () => {
         const o = !state.open.has(d.path);
         o ? state.open.add(d.path) : state.open.delete(d.path);
         localStorage.setItem("vs-open", JSON.stringify([...state.open]));
         kids.classList.toggle("closed", !o); row.querySelector(".tw").textContent = o ? "▾" : "▸";
+        applyActivity();
       };
       parent.append(row, kids); walk(d, kids);
     });
@@ -138,7 +141,7 @@ function renderTree() {
       row.className = "node " + (f.kind === "note" ? "note" : "att");
       row.dataset.path = f.path; row.draggable = true;
       row.title = f.kind === "note" ? `${f.title}\n${kb(f.size)} · ${fmtDate(f.mtime)}${f.big ? `\nGrößer als ${f.big} KB – Rechtsklick › Optimieren` : ""}` : `${f.type} · ${kb(f.size)}`;
-      row.innerHTML = `<span class="tw"></span><span class="ic">${f.kind === "note" ? "📄" : "📎"}</span><span>${esc(f.kind === "note" ? name.replace(/\.md$/, "") : name)}</span>${f.big ? `<span class="big" title="Größer als ${f.big} KB – aufteilen">⚠</span>` : ""}`;
+      row.innerHTML = `<span class="tw"></span><span class="ic">${f.kind === "note" ? "📄" : "📎"}</span><span class="nm">${esc(f.kind === "note" ? name.replace(/\.md$/, "") : name)}</span>${f.big ? `<span class="big" title="Größer als ${f.big} KB – aufteilen">⚠</span>` : ""}`;
       row.onclick = () => go(`#/${f.kind === "note" ? "note" : "file"}/${enc(f.path)}`);
       parent.append(row);
     });
@@ -146,6 +149,7 @@ function renderTree() {
   const start = state.vault ? state.tree.dirs[state.vault] : state.tree;
   if (start) walk(start, el); else el.innerHTML = `<p class="empty">Leer</p>`;
   markActive();
+  applyActivity();
 }
 
 function markActive() {
@@ -1235,9 +1239,81 @@ function connectLive() {
   live.es.onerror = () => liveDot(false, "Live-Verbindung unterbrochen – wird neu aufgebaut");
   live.es.onmessage = (m) => { try { onLive(JSON.parse(m.data)); } catch (e) { console.error(e); } };
 }
+// ------------------------------------------------------------------ Aktivität im Baum: wer liest (grün) oder ändert (rot) gerade
+
+// Pfad -> {kind, agents, until}; überlebt loadTree/renderTree, applyActivity überträgt sie auf die sichtbaren Zeilen
+const act = { map: new Map(), timer: null, on: (() => { try { return localStorage.getItem("vs-activity") !== "0"; } catch { return true; } })() };
+const ACT_MS = 4000, ACT_FADE = 1000;
+function actWho(agent) {
+  if (!agent) return "";
+  const host = agent.split("/")[0];
+  return host === "web" ? "web" : host;
+}
+function noteActivity(ev) {
+  if (!act.on) return;
+  const kind = ev.kind === "read" ? "read" : "write", now = Date.now(), who = actWho(ev.agent);
+  for (const p of ev.paths || []) {
+    const cur = act.map.get(p);
+    if (cur && cur.until > now && cur.kind === "write" && kind === "read") continue;   // Rot hat Vorrang
+    const same = cur && cur.until > now && cur.kind === kind;
+    const agents = same ? cur.agents : new Set();
+    if (who) agents.add(who);
+    act.map.set(p, { kind, agents, until: now + ACT_MS });
+  }
+  applyActivity();
+}
+function applyActivity() {
+  clearTimeout(act.timer);
+  const tree = $("#tree"); if (!tree) return;
+  const now = Date.now();
+  for (const [p, a] of act.map) if (a.until <= now) act.map.delete(p);
+  const rows = new Map();   // Zeile -> zusammengeführte Anzeige (zugeklappte Ordner übernehmen die ihrer Inhalte)
+  if (act.map.size) {
+    const byFile = new Map(), byDir = new Map();
+    tree.querySelectorAll(".node.note, .node.att").forEach((n) => byFile.set(n.dataset.path, n));
+    tree.querySelectorAll(".node.dir").forEach((n) => byDir.set(n.dataset.dir, n));
+    const visible = (n) => n && !n.parentElement.closest(".children.closed");
+    for (const [p, a] of act.map) {
+      let row = byFile.get(p) || byDir.get(p);
+      const parts = p.split("/");
+      for (let i = parts.length - 1; !visible(row) && i > 0; i--) row = byDir.get(parts.slice(0, i).join("/"));
+      if (!visible(row)) continue;
+      const m = rows.get(row);
+      if (!m) { rows.set(row, { kind: a.kind, agents: new Set(a.agents), until: a.until }); continue; }
+      if (a.kind === "write" && m.kind === "read") { m.kind = "write"; m.agents = new Set(a.agents); m.until = a.until; }
+      else if (a.kind === m.kind) { a.agents.forEach((x) => m.agents.add(x)); m.until = Math.max(m.until, a.until); }
+    }
+  }
+  tree.querySelectorAll(".node.act-read, .node.act-write").forEach((n) => {
+    if (!rows.has(n)) { n.classList.remove("act-read", "act-write", "act-fade"); n.querySelector(".act-who")?.remove(); }
+  });
+  let next = Infinity;
+  for (const [row, m] of rows) {
+    const fade = m.until - now <= ACT_FADE;
+    row.classList.toggle("act-read", m.kind === "read"); row.classList.toggle("act-write", m.kind === "write");
+    row.classList.toggle("act-fade", fade);
+    const label = m.agents.size ? `(${[...m.agents].join(", ")})` : "";
+    let w = row.querySelector(".act-who");
+    if (label && !w) { w = document.createElement("span"); w.className = "act-who"; row.querySelector(".nm")?.after(w); }
+    if (w) { if (label) w.textContent = label; else w.remove(); }
+    next = Math.min(next, fade ? m.until : m.until - ACT_FADE);
+  }
+  if (act.map.size) act.timer = setTimeout(applyActivity, Math.max(50, Math.min(next, now + 1000) - now));
+}
+function toggleActivity() {
+  act.on = !act.on;
+  try { localStorage.setItem("vs-activity", act.on ? "1" : "0"); } catch {}
+  if (!act.on) act.map.clear();
+  $("#btn-act")?.classList.toggle("on", act.on);
+  applyActivity();
+  toast(act.on ? "Aktivitätsanzeige ein" : "Aktivitätsanzeige aus");
+}
+
 function onLive(ev) {
   if (ev.rev) live.rev = ev.rev;
   if (ev.hello) return;
+  if (ev.kind === "read") { noteActivity(ev); return; }   // Lesen: nur anzeigen, nie Baum oder Ansicht neu laden
+  noteActivity(ev);   // vor loadTree: eine neue Datei erscheint nach dem Neuladen gleich rot
   if (ev.reset) { later("tree", 200, loadTree); refreshView(); return; }
   const paths = ev.paths || [], removed = ev.removed || [];
   if (ev.tree || removed.length || paths.some((p) => !treeHas(p))) later("tree", 400, () => loadTree().catch(() => {}));

@@ -769,21 +769,38 @@ def create_app(config: Config, start_background: bool = True) -> FastAPI:
         start = int(last) if last and last.isdigit() else svc.feed.rev
 
         async def stream():
-            rev, idle = start, 0.0
-            yield f"retry: 3000\nid: {rev}\ndata: {json.dumps({'hello': True, 'rev': rev})}\n\n"
-            while not await request.is_disconnected():
-                evs, reset = svc.feed.since(rev)
-                if reset:
-                    rev = svc.feed.rev
-                    yield f"id: {rev}\ndata: {json.dumps({'reset': True, 'rev': rev})}\n\n"
-                for e in evs:
-                    rev = e["rev"]
-                    yield f"id: {rev}\ndata: {json.dumps(e, ensure_ascii=False)}\n\n"
-                idle = 0.0 if evs else idle + 0.5
-                if idle >= 20:
-                    idle = 0.0
-                    yield ": ping\n\n"
-                await asyncio.sleep(0.5)
+            # Wecken statt Abfragen: Feed.publish/touch setzen das Event aus jedem Thread (call_soon_threadsafe).
+            # Lese-Ereignisse ohne id: werden nach einer Unterbrechung nicht nachgeholt.
+            loop, wake = asyncio.get_running_loop(), asyncio.Event()
+            svc.feed.subscribe(loop, wake)
+            try:
+                rev, rseq, quiet = start, svc.feed.read_seq, time.monotonic()
+                yield f"retry: 3000\nid: {rev}\ndata: {json.dumps({'hello': True, 'rev': rev})}\n\n"
+                while not await request.is_disconnected():
+                    wake.clear()
+                    evs, reset = svc.feed.since(rev)
+                    if reset:
+                        rev = svc.feed.rev
+                        yield f"id: {rev}\ndata: {json.dumps({'reset': True, 'rev': rev})}\n\n"
+                    for e in evs:
+                        rev = e["rev"]
+                        yield f"id: {rev}\ndata: {json.dumps(e, ensure_ascii=False)}\n\n"
+                    reads = svc.feed.reads_since(rseq)
+                    for e in reads:
+                        rseq = e["seq"]
+                        yield f"data: {json.dumps(e, ensure_ascii=False)}\n\n"
+                    rseq = max(rseq, svc.feed.read_seq)
+                    if evs or reads or reset:
+                        quiet = time.monotonic()
+                    elif time.monotonic() - quiet >= 20:
+                        quiet = time.monotonic()
+                        yield ": ping\n\n"
+                    try:
+                        await asyncio.wait_for(wake.wait(), 5)
+                    except asyncio.TimeoutError:
+                        pass
+            finally:
+                svc.feed.unsubscribe(loop, wake)
         return StreamingResponse(stream(), media_type="text/event-stream",
                                  headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
