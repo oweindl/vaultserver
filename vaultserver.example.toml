@@ -45,6 +45,13 @@ remote = "origin"
 # split = false            # true: jeder Ordner der obersten Ebene im Repo ist ein eigener Vault
 # push = true                # Token aus VS_GIT_TOKEN_ACME
 
+# Erweiterungen (docs/PLUGINS.md). Nur hier freigeschaltete Plug-ins werden geladen, auch wenn weitere
+# installiert sind; fehlt eines oder scheitert es beim Laden, startet der Server nicht.
+# [plugins]
+# enabled = ["meinplugin"]
+# [plugins.meinplugin]       # Einstellungen, die das Plug-in in register(ctx) als ctx.settings bekommt
+# gruss = "moin"
+
 [semantic]                 # Phase 6, braucht Ollama mit Embedding-Modell
 enabled = false
 ollama_url = "http://localhost:11434"
