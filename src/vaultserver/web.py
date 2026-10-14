@@ -30,6 +30,7 @@ from .mcp_server import build_mcp
 from .render import render
 from . import sizes
 from .optimize import Optimizer
+from .plugins import load_plugins, plugin_route, run_shutdown, run_startup
 from .scope import limits_for, load_projects
 from .scope import SCOPE_HEADER
 from .service import Service
@@ -156,12 +157,17 @@ def create_app(config: Config, start_background: bool = True) -> FastAPI:
     async def lifespan(app: FastAPI):
         if start_background:
             svc.start()
-        async with mcp.session_manager.run():
-            yield
+        await run_startup(app.state.plugins)
+        try:
+            async with mcp.session_manager.run():
+                yield
+        finally:
+            await run_shutdown(app.state.plugins)
         svc.stop()
 
     app = FastAPI(title="VaultServer", lifespan=lifespan, docs_url=None, redoc_url=None)
     app.state.svc = svc
+    app.state.plugins = []      # geladen am Ende von create_app (eigene Routen haben Vorrang)
 
     class Auth(BaseHTTPMiddleware):
         async def dispatch(self, request: Request, call_next):
@@ -188,9 +194,15 @@ def create_app(config: Config, start_background: bool = True) -> FastAPI:
                     hdrs.append((SCOPE_HEADER.encode(), scope_name.encode()))
                 request.scope["headers"] = hdrs
                 return await call_next(request)
+            route_auth = plugin_route(app.state.plugins, path) if app.state.plugins else None
+            if route_auth == "own":   # Plug-in prüft selbst; bekannte Anmeldung trotzdem mitgeben
+                user = read_session(request.cookies.get(COOKIE, ""), key, users)
+                request.state.user = user
+                request.state.agent = f"web/{user}" if user else (f"{machine}/api" if machine else None)
+                return await call_next(request)
             if path.startswith("/api/drop/"):
                 return await call_next(request)   # Einmal-Adresse ist selbst das Geheimnis
-            if path.startswith("/api/") and path not in ("/api/login", "/api/logout"):
+            if (path.startswith("/api/") and path not in ("/api/login", "/api/logout")) or route_auth == "vaultserver":
                 user = read_session(request.cookies.get(COOKIE, ""), key, users)
                 if not user and not machine:
                     return JSONResponse({"error": "Anmeldung erforderlich"}, status_code=401)
@@ -905,4 +917,7 @@ def create_app(config: Config, start_background: bool = True) -> FastAPI:
         return HTMLResponse((STATIC / "index.html").read_text(encoding="utf-8"),
                             headers={"Cache-Control": "no-cache"})
 
+    # -------------------------------------------------------------- Plug-ins (nur freigeschaltete)
+
+    app.state.plugins = load_plugins(app, svc)
     return app
