@@ -84,6 +84,10 @@ class Config:
     ollama_url: str = "http://localhost:11434"
     ollama_model: str = "nomic-embed-text"
 
+    # Erweiterungen: nur ausdrücklich freigeschaltete Plug-ins (Entry Points vaultserver.plugins) werden geladen
+    plugins_enabled: list[str] = field(default_factory=list)
+    plugin_settings: dict[str, dict] = field(default_factory=dict)   # [plugins.<name>] -> an register(ctx)
+
     @classmethod
     def load(cls, path: str | Path) -> "Config":
         path = Path(path)
@@ -96,6 +100,7 @@ class Config:
         server = data.get("server", {})
         git = data.get("git", {})
         sem = data.get("semantic", {})
+        plugins = data.get("plugins", {})
         areas = []
         for a in data.get("areas", []):
             a = dict(a)
@@ -145,6 +150,8 @@ class Config:
             semantic_enabled=sem.get("enabled", False),
             ollama_url=sem.get("ollama_url", "http://localhost:11434"),
             ollama_model=sem.get("model", "nomic-embed-text"),
+            plugins_enabled=[str(n) for n in plugins.get("enabled", [])],
+            plugin_settings={k: dict(v) for k, v in plugins.items() if isinstance(v, dict)},
         )
 
     def __post_init__(self):
