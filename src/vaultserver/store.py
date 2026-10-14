@@ -25,6 +25,7 @@ import yaml
 
 from .config import Area, Config
 from .gitops import Git, GitError, VaultGit, vault_git
+from .hooks import Hooks, WriteEvent, deferred
 from .repos import Repos
 from .index import Index, norm_key
 from .parser import MDLINK_RE, WIKILINK_RE, parse_note
@@ -140,6 +141,8 @@ class Store:
         self.dirty: set[str] = set()      # Repos mit Commits, die noch gepusht werden müssen ("" = Stamm)
         # Rückmeldung an die Live-Anzeige: (Pfade, Agent) – gesetzt vom Service
         self.on_change = None
+        # Erweiterungspunkte vor/nach dem Schreiben (Plug-ins); leer = keine Wirkung
+        self.hooks = Hooks()
 
     # ------------------------------------------------------------ Hilfen
 
@@ -209,6 +212,35 @@ class Store:
         self._notify(paths, agent)
         return commit
 
+    # ------------------------------------------------------------ Hooks (Plug-ins)
+
+    def _props(self, path: str, text: str | None) -> dict[str, str]:
+        if text is None or not path.endswith(".md"):
+            return {}
+        out: dict[str, str] = {}
+        for p in parse_note(text, PurePosixPath(path).stem).properties:
+            out.setdefault(norm_key(p.key), p.value)
+        return out
+
+    def _before(self, operation: str, path: str, agent: str, old: str | None = None, new: str | None = None,
+                **kw) -> WriteEvent | None:
+        """before_write auslösen (wirft Rejected); ohne Hooks nichts berechnen."""
+        if not self.hooks:
+            return None
+        target = kw.get("target")
+        ev = WriteEvent(operation=operation, path=path, agent=self._agent_label(agent),
+                        properties_before=self._props(path, old),
+                        properties_after=self._props(target or path, new if new is not None else
+                                                     (old if operation == "move" else None)),
+                        content_after=new, version_before=version_of(old) if old is not None else None,
+                        version_after=version_of(new) if new is not None else None, **kw)
+        self.hooks.before(ev)
+        return ev
+
+    def _after(self, ev: WriteEvent | None, commit: str | None, paths: list[str], **kw) -> None:
+        if ev is not None:
+            self.hooks.after(ev, commit=commit, paths=tuple(paths), **kw)
+
     def _check_version(self, path: str, base_version: str | None, current_text: str | None,
                        current_version: str | None) -> None:
         if current_text is None:
@@ -269,6 +301,7 @@ class Store:
                                   (time.time() + self.config.claim_minutes * 60, path))
             self.index.db.commit()
 
+    @deferred
     def claim(self, path: str, agent: str, note: str = "", minutes: int | None = None,
               set_status: bool = True) -> dict:
         path = self._norm_path(path)
@@ -313,6 +346,7 @@ class Store:
     TEXT_SUFFIXES = {".md", ".txt", ".json", ".csv", ".tsv", ".yaml", ".yml", ".svg", ".html", ".htm", ".css",
                      ".js", ".base", ".canvas", ".xml", ".ini", ".toml"}
 
+    @deferred
     def write(self, path: str, content: str, agent: str, base_version: str | None = None,
               message: str | None = None, force: bool = False) -> dict:
         path = self._norm_path(path)
@@ -327,10 +361,13 @@ class Store:
             if not content.endswith("\n"):
                 content += "\n"
             self._validate(path, content, old)
+            ev = self._before("write", path, agent, old, content, paths=(path,))
             self._write_file(path, content)
             commit = self._finish([path], message or f"{'Neu' if old is None else 'Geändert'}: {path}", agent)
+            self._after(ev, commit, [path])
             return {"path": path, "version": self._remember(content), "commit": commit, "created": old is None}
 
+    @deferred
     def patch_section(self, path: str, section: str | None, content: str, agent: str,
                       base_version: str | None = None, mode: str = "replace",
                       message: str | None = None, force: bool = False) -> dict:
@@ -384,10 +421,13 @@ class Store:
                 out = lines[:span.end] + ([""] if lines[span.end - 1].strip() else []) + new + [""] + lines[span.end:]
             result = _join(out)
             self._validate(path, result, text)
+            ev = self._before("patch_section", path, agent, text, result, paths=(path,), section=section)
             self._write_file(path, result)
             commit = self._finish([path], message or f"{PurePosixPath(path).stem}: Abschnitt {section or 'neu'} ({mode})", agent)
+            self._after(ev, commit, [path])
             return {"path": path, "version": self._remember(result), "commit": commit}
 
+    @deferred
     def set_property(self, path: str, key: str, value: str, agent: str,
                      base_version: str | None = None, message: str | None = None,
                      force: bool = False) -> dict:
@@ -436,8 +476,10 @@ class Store:
             if result == text:
                 return {"path": path, "version": cur_v, "commit": None, "unchanged": True}
             self._validate(path, result, text)
+            ev = self._before("set_property", path, agent, text, result, paths=(path,))
             self._write_file(path, result)
             commit = self._finish([path], message or f"{PurePosixPath(path).stem} {key} = {value}", agent)
+            self._after(ev, commit, [path])
             return {"path": path, "version": self._remember(result), "commit": commit}
 
     @staticmethod
@@ -448,6 +490,7 @@ class Store:
                     return i + 1
         return 0
 
+    @deferred
     def delete(self, path: str, agent: str, base_version: str | None = None,
                message: str | None = None, force: bool = False) -> dict:
         path = self._norm_path(path)
@@ -457,11 +500,14 @@ class Store:
                 raise KeyError(f"Notiz nicht gefunden: {path}")
             self._check_version(path, base_version, text, cur_v)
             self._check_claim(path, agent, force)
+            ev = self._before("delete", path, agent, text, None, paths=(path,))
             self._abs(path).unlink()
             self.index.db.execute("DELETE FROM claims WHERE path = ?", (path,))
             commit = self._finish([path], message or f"Gelöscht: {path}", agent)
+            self._after(ev, commit, [path])
             return {"path": path, "deleted": True, "commit": commit}
 
+    @deferred
     def move(self, src: str, dst: str, agent: str, message: str | None = None,
              update_links: bool = True, force: bool = False) -> dict:
         """Notiz oder Anhang verschieben; Wikilinks und Markdown-Links werden nachgezogen."""
@@ -480,6 +526,10 @@ class Store:
             if src.endswith(".md"):
                 self._check_claim(src, agent, force)
             sources = sorted({b["path"] for b in self._raw_backlinks(src)} - {src}) if update_links else []
+            ev = None
+            if self.hooks:
+                old = s_full.read_text(encoding="utf-8") if src.endswith(".md") else None
+                ev = self._before("move", src, agent, old, None, target=dst, paths=(src, dst))
             d_full.parent.mkdir(parents=True, exist_ok=True)
             os.replace(s_full, d_full)
             changed = [src, dst]
@@ -493,6 +543,7 @@ class Store:
                     changed.append(note)
             self.index.db.execute("UPDATE claims SET path = ? WHERE path = ?", (dst, src))
             commit = self._finish(changed, message or f"Verschoben: {src} → {dst}", agent)
+            self._after(ev, commit, changed, version_after=self.current(dst)[1] if dst.endswith(".md") else None)
             return {"from": src, "to": dst, "updated_notes": changed[2:], "commit": commit,
                     "version": self.current(dst)[1] if dst.endswith(".md") else None}
 
@@ -556,6 +607,7 @@ class Store:
             out.append(line)
         return "\n".join(out)
 
+    @deferred
     def upload(self, path: str, data: bytes, agent: str, message: str | None = None,
                overwrite: bool = False) -> dict:
         """Datei (auch Bild/Binärdatei) speichern. Gibt es den Namen schon, wird ohne overwrite ein freier
@@ -580,9 +632,11 @@ class Store:
                         path, full, renamed = cand, self._abs(cand), True
                         break
                     k += 1
+            ev = self._before("upload", path, agent, None, None, paths=(path,))
             full.parent.mkdir(parents=True, exist_ok=True)
             full.write_bytes(data)
             commit = self._finish([path], message or f"Anhang: {path}", agent)
+            self._after(ev, commit, [path])
             return {"path": path, "size": len(data), "renamed": renamed, "commit": commit}
 
     # ------------------------------------------------------------ Ordner und Papierkorb
@@ -635,6 +689,7 @@ class Store:
                 commit = self._finish_raw([f"{b}/{self.KEEP}"], f"Papierkorb {b} angelegt", "vaultserver") or commit
         return commit
 
+    @deferred
     def mkdir(self, path: str, agent: str, message: str | None = None) -> dict:
         """Neuen (leeren) Ordner anlegen; ohne Schrägstrich = neues Stammverzeichnis („neuer Vault“)."""
         path = path.strip().strip("/")
@@ -644,11 +699,14 @@ class Store:
             full = self._abs(path)
             if full.exists():
                 raise Rejected(f"Gibt es schon: {path}")
+            ev = self._before("mkdir", path, agent, paths=(f"{path}/{self.KEEP}",))
             full.mkdir(parents=True)
             (full / self.KEEP).write_text("", encoding="utf-8")
             commit = self._finish_raw([f"{path}/{self.KEEP}"], message or f"Ordner angelegt: {path}", agent)
+            self._after(ev, commit, [f"{path}/{self.KEEP}"])
             return {"path": path, "created": True, "commit": commit}
 
+    @deferred
     def trash(self, path: str, agent: str, base_version: str | None = None, message: str | None = None,
               force: bool = False) -> dict:
         """Notiz, Anhang oder Ordner in den Papierkorb schieben (mit Herkunft, wiederherstellbar)."""
@@ -680,6 +738,10 @@ class Store:
                         self._check_claim(f, agent, force)
             else:
                 files = [path]
+            ev = None
+            if self.hooks:
+                old = self.current(path)[0] if kind == "note" else None
+                ev = self._before("trash", path, agent, old, None, paths=tuple(files))
             entry = f"{self._bin_for(path)}/{time.strftime('%Y%m%dT%H%M%S')}-{secrets.token_hex(2)}"
             dest = self.config.vault_path / entry / path
             dest.parent.mkdir(parents=True, exist_ok=True)
@@ -694,6 +756,7 @@ class Store:
                 self.index.db.execute("DELETE FROM claims WHERE path = ?", (f,))
             moved = [f"{entry}/{f}" for f in files] + [f"{entry}/{self.META}"]
             commit = self._finish_raw(files + moved, message or f"In den Papierkorb: {path}", agent)
+            self._after(ev, commit, files + moved)
             return {"path": path, "kind": kind, "trashed": True, "id": entry.rsplit("/", 1)[1],
                     "files": len(files), "commit": commit}
 
@@ -735,6 +798,7 @@ class Store:
         out.sort(key=lambda e: e["id"], reverse=True)
         return out
 
+    @deferred
     def restore(self, entry_id: str, agent: str, message: str | None = None) -> dict:
         """Eintrag an die alte Stelle zurück. Ordner werden mit einem vorhandenen Ordner zusammengeführt;
         gibt es eine Datei dort schon, wird nichts verschoben und die Konflikte werden genannt."""
@@ -750,6 +814,10 @@ class Store:
             if clash:
                 raise Rejected(f"Gibt es an der alten Stelle schon: {', '.join(clash[:5])}"
                                + (f" (+{len(clash) - 5})" if len(clash) > 5 else ""))
+            ev = None
+            if self.hooks:
+                new = (d / orig).read_text(encoding="utf-8") if meta["kind"] == "note" else None
+                ev = self._before("restore", orig, agent, None, new, paths=tuple(rel_files))
             for f in rel_files:
                 dst = self.config.vault_path / f
                 if dst.exists():   # nur .gitkeep
@@ -762,22 +830,26 @@ class Store:
                 self.index.index_file(f)
             gone = [f"{b}/{entry_id}/{f}" for f in rel_files] + [f"{b}/{entry_id}/{self.META}"]
             commit = self._finish_raw(rel_files + gone, message or f"Wiederhergestellt: {orig}", agent)
+            self._after(ev, commit, rel_files + gone)
             return {"id": entry_id, "path": orig, "kind": meta["kind"], "restored": True, "files": len(rel_files),
                     "commit": commit}
 
+    @deferred
     def purge(self, entry_id: str | None, agent: str) -> dict:
         """Papierkorb-Eintrag endgültig löschen (bleibt in der Git-Historie); ohne id: Papierkorb leeren."""
         with self.lock:
             ids = [entry_id] if entry_id else [e["id"] for e in self.bin_list()]
-            paths = []
-            for i in ids:
-                d, meta, b = self._entry(i)
-                paths += self._files_under(f"{b}/{i}")
-                shutil.rmtree(d)
             if not ids:
                 return {"purged": 0, "commit": None}
+            entries = [self._entry(i) for i in ids]
+            paths = [f for i, (_d, _m, b) in zip(ids, entries) for f in self._files_under(f"{b}/{i}")]
+            where = f"{entries[0][2]}/{ids[0]}" if entry_id else self.bin
+            ev = self._before("purge", where, agent, paths=tuple(paths))
+            for d, meta, _b in entries:
+                shutil.rmtree(d)
             label = f"Endgültig gelöscht: {meta['original']}" if entry_id else f"Papierkorb geleert ({len(ids)} Einträge)"
             commit = self._finish_raw(paths, label, agent)
+            self._after(ev, commit, paths)
             return {"purged": len(ids), "commit": commit}
 
     # ------------------------------------------------------------ Vorlagen (Idee 2)
@@ -808,6 +880,7 @@ class Store:
                 out.append(f"- {k}: {v}")
         return "\n".join(out)
 
+    @deferred
     def create_from_template(self, area_name: str, title: str, fields: dict[str, object], agent: str,
                              summary: str = "", body: str = "", message: str | None = None) -> dict:
         area = self.config.area_by_name(area_name)
@@ -849,6 +922,7 @@ class Store:
                 raise Rejected(f"Vorlage für {area.name} verletzt Regeln", problems)
             if self._abs(path).exists():
                 raise Rejected(f"Datei existiert bereits: {path}")
+            ev = self._before("create_from_template", path, agent, None, text, paths=(path,))
             self._write_file(path, text)
             changed = [path]
             if area.overview and area.overview_entry and self._abs(area.overview).exists():
@@ -860,6 +934,7 @@ class Store:
                 self._write_file(area.overview, self._insert_entry(ov, area, entry))
                 changed.append(area.overview)
             commit = self._finish(changed, message or f"{PurePosixPath(path).stem} angelegt: {title}", agent)
+            self._after(ev, commit, changed)
             return {"path": path, "number": n, "version": self._remember(text), "commit": commit,
                     "overview_updated": area.overview in changed}
 

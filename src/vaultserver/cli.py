@@ -132,10 +132,14 @@ def main(argv: list[str] | None = None) -> int:
         from .web import create_app
         logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
         from .gitops import GitError
+        from .plugins import PluginError
         try:
             app = create_app(config)
         except GitError as e:
             print(f"Vault: {e}", file=sys.stderr)
+            return 2
+        except PluginError as e:
+            print(f"Plug-in: {e}", file=sys.stderr)
             return 2
         uvicorn.run(app, host=args.host or config.host, port=args.port or config.port,
                     log_level="info", access_log=False)

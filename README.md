@@ -164,6 +164,46 @@ Schreibende Aufrufe brauchen die zuletzt gelesene Version (`base_version`). Hat 
 
 Ordnerbaum mit Ziehen und Ablegen und Kontextmenü, gerenderte Notizen mit Wikilinks, Bildern, HTML-Mockups und anklickbaren Checkboxen, Gliederung, Eigenschaften (Status direkt umschaltbar), Backlinks und Git-Verlauf. Bilder, PDFs, Mockups und andere Anhänge erscheinen im Inhaltsbereich wie eine Notiz; ein Klick auf ein Bild (auch eingebettet in einer Notiz) öffnet es in einem neuen Browser-Tab. Dazu Suche (Strg+K), Editor mit Wikilink-Vervollständigung nach `[[`, Konfliktansicht, neue FIX- und Feature-Einträge aus der Vorlage, Prüfung, Änderungsliste und Passwortänderung. Funktioniert auch auf dem Handy.
 
+## Erweiterungen (Plug-ins)
+
+Plug-ins sind eigene Python-Pakete, die sich in den laufenden Server einhängen: Routen, Hintergrunddienste,
+Prüfungen vor dem Schreiben, Reaktionen nach dem Schreiben und eine interne Schnittstelle zum Vault. Geladen
+wird nur, was in der Konfiguration ausdrücklich freigeschaltet ist; ohne `[plugins]` verhält sich der Server
+genau wie ohne diese Funktion.
+
+```python
+# meinplugin/__init__.py – im pyproject.toml des Plug-ins:
+# [project.entry-points."vaultserver.plugins"]
+# meinplugin = "meinplugin"
+from fastapi import APIRouter
+from vaultserver.store import Rejected
+
+def register(ctx):
+    router = APIRouter()
+
+    @router.get("/hallo")
+    def hallo():
+        return {"gruss": ctx.settings.get("gruss", "hallo")}
+
+    ctx.include_router(router, prefix="/meinplugin")          # Anmeldung wie /api
+
+    def pruefen(ev):                                           # vor jedem Schreiben
+        if ev.content_after and "GEHEIM" in ev.content_after:
+            raise Rejected("Kein Geheimnis im Vault", ["Inhalt: GEHEIM"])
+
+    ctx.add_hook("before_write", pruefen)
+    ctx.add_hook("after_write", lambda ev: ctx.log.info("%s %s -> %s", ev.operation, ev.path, ev.commit))
+```
+
+```toml
+[plugins]
+enabled = ["meinplugin"]
+[plugins.meinplugin]
+gruss = "moin"
+```
+
+Lebenszyklus, Hook-Semantik, Sicherheit und Grenzen: [docs/PLUGINS.md](docs/PLUGINS.md).
+
 ## Entwicklung
 
 ```
