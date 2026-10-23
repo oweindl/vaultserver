@@ -36,6 +36,17 @@ from .scope import SCOPE_HEADER
 from .service import Service
 from .store import Conflict, Rejected
 
+PROCESS_WARN = 400      # unter pids_limit (500) in compose.yaml
+
+
+def container_processes() -> int | None:
+    """Anzahl Prozesse im Container (eigener PID-Namensraum); außerhalb von Docker None,
+    weil /proc dort alle Prozesse des Rechners zeigt."""
+    if not Path("/.dockerenv").exists():
+        return None
+    return sum(1 for d in os.listdir("/proc") if d.isdigit())
+
+
 log = logging.getLogger("vaultserver")
 STATIC = Path(__file__).parent / "static"
 COOKIE = "vs_session"
@@ -899,7 +910,14 @@ def create_app(config: Config, start_background: bool = True) -> FastAPI:
         st = svc.store.git_status
         # ohne Anmeldung: nur ob Pull/Push zuletzt geklappt haben, kein Remote, keine Fehlertexte
         git = {k: (v["ok"] if v else None) for k, v in st.items()}
-        return {"ok": True, "notes": svc.index.stats()["notes"], "last_error": svc.last_error, "git": git}
+        procs = container_processes()
+        ok = procs is None or procs < PROCESS_WARN
+        body = {"ok": ok, "notes": svc.index.stats()["notes"], "last_error": svc.last_error, "git": git,
+                "processes": procs}
+        if not ok:
+            body["warning"] = f"{procs} Prozesse im Container (Grenze {PROCESS_WARN}) – Zombies?"
+        # 503 macht den Docker-Healthcheck „unhealthy“, bevor gar kein Prozess mehr startet
+        return body if ok else JSONResponse(body, status_code=503)
 
     @app.api_route("/favicon.ico", methods=["GET", "HEAD"], include_in_schema=False)
     def favicon():

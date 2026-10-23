@@ -8,6 +8,7 @@ wird zwischen Threads geteilt).
 from __future__ import annotations
 
 import contextlib
+import contextvars
 import hashlib
 import json
 import os
@@ -48,6 +49,11 @@ class Conflict(Exception):
     def as_dict(self) -> dict:
         return {"error": "conflict", "message": str(self), "path": self.path,
                 "current_version": self.version, "current_text": self.text}
+
+
+# Warnung des laufenden Schreibaufrufs, wenn die Datei gespeichert ist, der Commit aber scheiterte
+COMMIT_WARNING: contextvars.ContextVar[str | None] = contextvars.ContextVar("vaultserver_commit_warning",
+                                                                           default=None)
 
 
 class Rejected(Exception):
@@ -135,10 +141,11 @@ class Store:
         # Repo im Stamm plus eingebundene Repos (Ordner der obersten Ebene)
         self.git = VaultGit(vault_git(config), self.repos.mounted)
         # Ergebnis des letzten Pull/Push des Stamm-Repos für Anzeige und /healthz
-        self.git_status: dict[str, dict | None] = {"pull": None, "push": None}
+        self.git_status: dict[str, dict | None] = {"pull": None, "push": None, "commit": None}
         # Version -> Text früherer Stände, für Abschnitts-Patches gegen ältere Versionen
         self._history: OrderedDict[str, str] = OrderedDict()
         self.dirty: set[str] = set()      # Repos mit Commits, die noch gepusht werden müssen ("" = Stamm)
+        self.uncommitted: set[str] = set()  # gespeichert, aber Commit gescheitert – wird nachgeholt
         # Rückmeldung an die Live-Anzeige: (Pfade, Agent) – gesetzt vom Service
         self.on_change = None
         # Erweiterungspunkte vor/nach dem Schreiben (Plug-ins); leer = keine Wirkung
@@ -202,13 +209,47 @@ class Store:
             except Exception:  # noqa: BLE001 – Live-Anzeige darf Schreiben nie stören
                 pass
 
+    def _commit(self, paths: list[str], message: str, agent: str) -> str | None:
+        """Committen. Scheitert git, bleibt die gespeicherte Änderung gültig: Warnung statt Fehler,
+        der Commit wird im Hintergrund nachgeholt (commit_pending)."""
+        if not self.config.git_commit:
+            return None
+        try:
+            commit, repos = self.git.commit(paths, f"{self._agent_label(agent)}: {message}", self._agent_label(agent))
+        except Exception as e:  # noqa: BLE001 – auch OSError, wenn kein Prozess mehr startet
+            self.uncommitted.update(paths)
+            self._track("", "commit", False, self.git.redact(str(e)))
+            COMMIT_WARNING.set("Gespeichert, aber git-Commit fehlgeschlagen; wird nachgeholt")
+            return None
+        self.dirty |= repos
+        return commit
+
+    def commit_pending(self) -> str | None:
+        """Gescheiterte Commits nachholen (aus dem Hintergrund-Thread)."""
+        with self.lock:
+            if not self.uncommitted:
+                return None
+            paths = []
+            for p in sorted(self.uncommitted):
+                _prefix, g, rel = self.git.split(p)
+                # gelöscht und nie committet: nichts nachzuholen (git add würde den Pfad nicht finden)
+                if self._abs(p).exists() or g.run("ls-files", "--", rel, check=False).strip():
+                    paths.append(p)
+            try:
+                commit, repos = (self.git.commit(paths, f"vaultserver: Nachgeholt ({len(paths)} Dateien)",
+                                                 "vaultserver") if paths else (None, set()))
+            except Exception as e:  # noqa: BLE001
+                self._track("", "commit", False, self.git.redact(str(e)))
+                raise
+            self.uncommitted.clear()
+            self.dirty |= repos
+            self._track("", "commit", True)
+            return commit
+
     def _finish(self, paths: list[str], message: str, agent: str) -> str | None:
         for p in paths:
             self.index.index_file(p)
-        commit = None
-        if self.config.git_commit:
-            commit, repos = self.git.commit(paths, f"{self._agent_label(agent)}: {message}", self._agent_label(agent))
-            self.dirty |= repos
+        commit = self._commit(paths, message, agent)
         self._notify(paths, agent)
         return commit
 
@@ -762,10 +803,7 @@ class Store:
 
     def _finish_raw(self, paths: list[str], message: str, agent: str) -> str | None:
         """Wie _finish, aber ohne Index (Papierkorb ist nicht im Index)."""
-        commit = None
-        if self.config.git_commit:
-            commit, repos = self.git.commit(paths, f"{self._agent_label(agent)}: {message}", self._agent_label(agent))
-            self.dirty |= repos
+        commit = self._commit(paths, message, agent)
         self._notify(paths, agent)
         return commit
 

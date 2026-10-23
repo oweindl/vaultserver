@@ -11,6 +11,9 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 PASSWORD_ENV = "VAULTSERVER_GIT_PASSWORD"   # nur in der Umgebung des git-Prozesses, nie auf der Kommandozeile
+# Keine abgekoppelten Hintergrundprozesse (auto-gc, Wartung): sie überleben git und bleiben als Zombies
+# hängen, wenn PID 1 sie nicht wegräumt.
+NO_DETACH = ["-c", "gc.autoDetach=false", "-c", "maintenance.autoDetach=false"]
 
 
 class GitError(RuntimeError):
@@ -74,7 +77,7 @@ class Git:
         return (self.repo / ".git").exists()
 
     def run(self, *args: str, check: bool = True) -> str:
-        res = subprocess.run(["git", *self.ident, *self._auth, *args], cwd=self.repo, capture_output=True,
+        res = subprocess.run(["git", *NO_DETACH, *self.ident, *self._auth, *args], cwd=self.repo, capture_output=True,
                              text=True, env=self._env)
         if check and res.returncode != 0:
             raise GitError(self.redact(f"git {' '.join(args)}: {res.stderr.strip() or res.stdout.strip()}"))
@@ -199,7 +202,8 @@ class Git:
         return ranges
 
     def show(self, rev: str, path: str) -> str | None:
-        res = subprocess.run(["git", "show", f"{rev}:{path}"], cwd=self.repo, capture_output=True, text=True)
+        res = subprocess.run(["git", *NO_DETACH, "show", f"{rev}:{path}"], cwd=self.repo, capture_output=True,
+                             text=True)
         return res.stdout if res.returncode == 0 else None
 
 

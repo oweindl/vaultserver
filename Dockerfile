@@ -3,7 +3,7 @@
 FROM python:3.13-slim
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends git ca-certificates \
+ && apt-get install -y --no-install-recommends git ca-certificates tini \
  && rm -rf /var/lib/apt/lists/*
 
 # Der Container läuft mit der UID des Host-Benutzers (compose: user:), damit
@@ -26,5 +26,7 @@ EXPOSE 8100
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s \
   CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8100/healthz', timeout=4)"
 
-ENTRYPOINT ["vaultserver", "-c", "/config/vaultserver.toml"]
+# tini als PID 1 räumt verwaiste Prozesse weg (sonst sammeln sich git-Zombies, bis der Container
+# keine Prozesse mehr starten kann – Vorfall 17.10.2026).
+ENTRYPOINT ["/usr/bin/tini", "--", "vaultserver", "-c", "/config/vaultserver.toml"]
 CMD ["serve", "--host", "0.0.0.0", "--port", "8100"]

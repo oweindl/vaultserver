@@ -104,3 +104,16 @@ def test_favicon_get_and_head_without_login(setup: Config):
         for r in (c.get("/favicon.ico"), c.head("/favicon.ico")):
             assert r.status_code == 200 and r.headers["content-type"] == "image/x-icon"
         assert c.get("/static/icon-192.png").status_code == 200
+
+
+def test_healthz_processes(setup: Config, monkeypatch):
+    from vaultserver import web
+    with TestClient(create_app(setup, start_background=False)) as c:
+        monkeypatch.setattr(web, "container_processes", lambda: None)     # außerhalb von Docker
+        r = c.get("/healthz")
+        assert r.status_code == 200 and r.json()["processes"] is None
+        monkeypatch.setattr(web, "container_processes", lambda: 12)
+        assert c.get("/healthz").json() | {"ok": True, "processes": 12} == c.get("/healthz").json()
+        monkeypatch.setattr(web, "container_processes", lambda: 9288)
+        r = c.get("/healthz")
+        assert r.status_code == 503 and r.json()["ok"] is False and "9288" in r.json()["warning"]

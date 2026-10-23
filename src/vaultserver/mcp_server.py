@@ -18,7 +18,7 @@ from .service import Service
 from . import sizes
 from .optimize import Optimizer
 from .scope import limits_for
-from .store import Conflict, Rejected
+from .store import COMMIT_WARNING, Conflict, Rejected
 
 INSTRUCTIONS = """VaultServer: Markdown-Vault (Projekte, Fixliste, Features, Status) mit Suchindex.
 Zu Beginn jeder Sitzung `guide` aufrufen (mit area, wenn du in einem Bereich arbeitest).
@@ -50,8 +50,11 @@ def _guard(fn):
     """Konflikte und Regelverstöße als normales Ergebnis zurückgeben, damit der Agent den
     aktuellen Stand bzw. die Gründe sieht; unbekannte Pfade als Werkzeugfehler."""
     def run(*a, **kw):
+        COMMIT_WARNING.set(None)
         try:
-            return fn(*a, **kw)
+            res = fn(*a, **kw)
+            warning = COMMIT_WARNING.get()
+            return {**res, "warning": warning} if warning and isinstance(res, dict) else res
         except (Conflict, Rejected) as e:
             return _SCOPE.get().rel(e.as_dict())
         except KeyError as e:  # Meldung soll beim Agenten ankommen, nicht nur "Error executing tool"
