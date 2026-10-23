@@ -212,6 +212,8 @@ class Service:
                     if r.get("pulled"):
                         log.info("git pull: %s", r)
                         self.store.ensure_bin()  # falls jemand den Papierkorb woanders gelöscht hat
+                if self.store.uncommitted:
+                    self.store.commit_pending()
                 if self.store.dirty_push and now - last["push"] >= 10:
                     last["push"] = now
                     self.store.push()

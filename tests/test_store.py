@@ -237,3 +237,38 @@ def test_link_commits(store: Store, tmp_path: Path):
     text = (store.config.vault_path / "CMT/Fixliste/FIX-001.md").read_text()
     assert "## Commits (automatisch)" in text and "FIX-001: Suche repariert" in text
     assert store.link_commits("cli")["commit"] is None  # idempotent
+
+
+def test_failed_commit_is_warning_and_retried(store: Store, monkeypatch):
+    from vaultserver import gitops
+    from vaultserver.store import COMMIT_WARNING
+    v = store.config.vault_path
+    real = gitops.Git.commit
+
+    def broken(self, *a, **kw):
+        raise BlockingIOError(11, "Resource temporarily unavailable")
+    monkeypatch.setattr(gitops.Git, "commit", broken)
+    COMMIT_WARNING.set(None)
+    res = store.write("Neu.md", "# Neu\n", "t")          # gespeichert und indexiert, kein Fehler
+    assert res["commit"] is None and COMMIT_WARNING.get()
+    assert (v / "Neu.md").exists() and store.index.read("Neu.md")["text"].startswith("# Neu")
+    assert store.uncommitted == {"Neu.md"} and store.git_status["commit"]["ok"] is False
+    store.write("Weg.md", "# Weg\n", "t")
+    (v / "Weg.md").unlink()                               # nie committet und wieder weg: nichts nachzuholen
+
+    monkeypatch.setattr(gitops.Git, "commit", real)
+    assert store.commit_pending()
+    assert not store.uncommitted and store.git_status["commit"]["ok"] is True
+    assert "Neu.md" in git(v, "log", "-1", "--name-only", "--format=")
+    assert git(v, "status", "--porcelain") == ""
+
+
+def test_guard_adds_commit_warning():
+    from vaultserver.mcp_server import _guard
+    from vaultserver.store import COMMIT_WARNING
+
+    def write():
+        COMMIT_WARNING.set("Gespeichert, aber git-Commit fehlgeschlagen; wird nachgeholt")
+        return {"path": "A.md", "commit": None}
+    assert _guard(write)()["warning"].startswith("Gespeichert")
+    assert "warning" not in _guard(lambda: {"path": "A.md"})()     # Warnung gilt nur für ihren Aufruf
