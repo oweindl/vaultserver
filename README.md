@@ -114,6 +114,7 @@ Alles Nötige steht in der Web-Oberfläche unter **Konto › Einrichtung (Claude
 - **Zugänge je Rechner:** anlegen, „Neuer Token“, sperren, mit „zuletzt benutzt“.
   - Neue Tokens werden nur einmal angezeigt und nur als SHA-256 in `data/tokens.json` gespeichert.
   - Tokens aus `vaultserver.toml` lassen sich dort sperren oder ersetzen.
+  - **Lese-Token:** Beim Anlegen (oder später in der Tabelle) lässt sich „Nur lesen“ wählen, z. B. für Anzeigen und Auswertungen. Über `/mcp` lehnt jedes schreibende Werkzeug einen solchen Zugang ab (die Sperre hängt an der Anmeldung der Werkzeuge: ein neues schreibendes Werkzeug ist automatisch gesperrt); über `/api` gelten nur diese GET-Adressen: `recent`, `events`, `tree`, `note`, `file/…`, `search`, `query`, `complete`, `tasks`, `lint`, `claims`, `guide`, `projects`, `me`. Einrichtung, Zugänge, Repos und alles Schreibende gibt es dort nicht (403). Ein Lese-Token sieht den ganzen Vault (an ein Projekt gebundene Zugänge haben auf `/api` ohnehin keinen Zugriff). „Neuer Token“ und der Export der Konfiguration behalten das Recht; Zugänge aus `vaultserver.toml` dürfen immer schreiben.
 - **Anleitungen:**
   - Claude Code, mit dem Block für `CLAUDE.md`.
   - Claude Desktop über `mcp-remote`.

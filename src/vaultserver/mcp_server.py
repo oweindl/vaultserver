@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import binascii
 import contextvars
+import functools
 from pathlib import PurePosixPath
 import mimetypes
 from typing import Any, Literal
@@ -42,6 +43,15 @@ def agent_from(ctx: Context | None, svc: Service) -> str:
     return f"{machine}/{tool}"
 
 
+def readonly_from(ctx: Context | None, svc: Service) -> bool:
+    """True, wenn der Aufruf mit einem Lese-Token kommt (nur in der Oberfläche angelegte Zugänge)."""
+    headers = (ctx.headers if ctx else None) or {}
+    auth = headers.get("authorization", "")
+    token = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
+    found = svc.clients.lookup_access(token) if token else None
+    return bool(found and found[2])
+
+
 # Projekt-Kontext des laufenden Werkzeugaufrufs (für Konflikt-/Regelmeldungen mit relativen Pfaden)
 _SCOPE: contextvars.ContextVar[Scope] = contextvars.ContextVar("vaultserver_scope", default=Scope(None))
 
@@ -67,6 +77,26 @@ def _guard(fn):
 def build_mcp(svc: Service) -> MCPServer:
     mcp = MCPServer("vaultserver", instructions=INSTRUCTIONS, version="0.3.0")
     st, ix, lock = svc.store, svc.index, svc.lock
+
+    # Lese-Token: jedes Werkzeug, das nicht als „nur lesend“ (RO) angemeldet ist, lehnt ihn ab. Die Sperre hängt an der
+    # Anmeldung der Werkzeuge, nicht an einer Liste von Namen – ein neues schreibendes Werkzeug ist automatisch gesperrt.
+    register = mcp.tool
+
+    def tool(*a, annotations=None, **kw):
+        deco = register(*a, annotations=annotations, **kw)
+        if annotations is not None and annotations.read_only_hint:
+            return deco
+
+        def guarded(fn):
+            @functools.wraps(fn)
+            def run(*args, **kwargs):
+                if readonly_from(kwargs.get("ctx"), svc):
+                    raise ToolError("Dieser Zugang darf nur lesen (Lese-Token); zum Schreiben einen normalen Zugang verwenden")
+                return fn(*args, **kwargs)
+            return deco(run)
+        return guarded
+
+    mcp.tool = tool
 
     def scope_of(ctx: Context | None) -> Scope:
         """Projekt-Kontext aus der Kopfzeile, die nur die Auth-Middleware setzt (/mcp/<projekt> oder
