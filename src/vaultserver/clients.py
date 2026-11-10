@@ -44,6 +44,7 @@ class Clients:
         data.setdefault("revoked", [])     # SHA-256 gesperrter Tokens aus der Konfiguration
         data.setdefault("last_seen", {})   # id -> Zeitpunkt
         data.setdefault("projects", {})    # id -> Projektname (Zugang nur für dieses Projekt)
+        data.setdefault("readonly", [])    # ids von Zugängen, die nur lesen dürfen (Lese-Token)
         return data
 
     def _save(self) -> None:
@@ -62,6 +63,12 @@ class Clients:
 
     def lookup_full(self, token: str) -> tuple[str, str | None] | None:
         """(Rechnername, Projekt oder None) zum Token; None, wenn unbekannt oder gesperrt."""
+        found = self.lookup_access(token)
+        return (found[0], found[1]) if found else None
+
+    def lookup_access(self, token: str) -> tuple[str, str | None, bool] | None:
+        """(Rechnername, Projekt oder None, nur lesen) zum Token; None, wenn unbekannt oder gesperrt.
+        Zugänge aus der Konfiguration dürfen immer schreiben; „nur lesen“ gibt es für in der Oberfläche angelegte."""
         if not token:
             return None
         h = _sha(token)
@@ -74,7 +81,7 @@ class Clients:
             if name is None:
                 return None
             self._touch(h[:12])
-            return name, self._data["projects"].get(h[:12])
+            return name, self._data["projects"].get(h[:12]), h[:12] in self._data["readonly"]
 
     def _touch(self, cid: str) -> None:
         now = time.time()
@@ -97,13 +104,14 @@ class Clients:
                 if h in self._data["revoked"]:
                     continue
                 out.append({"id": h[:12], "name": name, "source": "config", "created": None, "last_seen": seen.get(h[:12]),
-                            "project": projects.get(h[:12])})
+                            "project": projects.get(h[:12]), "readonly": False})
             for t in self._data["tokens"]:
                 out.append({"id": t["hash"][:12], "name": t["name"], "source": "web", "created": t["created"],
-                            "last_seen": seen.get(t["hash"][:12]), "project": projects.get(t["hash"][:12])})
+                            "last_seen": seen.get(t["hash"][:12]), "project": projects.get(t["hash"][:12]),
+                            "readonly": t["hash"][:12] in self._data["readonly"]})
             return sorted(out, key=lambda c: c["name"].lower())
 
-    def create(self, name: str, project: str | None = None) -> dict:
+    def create(self, name: str, project: str | None = None, readonly: bool = False) -> dict:
         name = (name or "").strip()
         if not NAME_RE.match(name):
             raise ValueError("Name: 1–40 Zeichen, Buchstaben, Ziffern, Punkt, Minus, Unterstrich (z. B. laptop-oliver)")
@@ -115,8 +123,10 @@ class Clients:
             self._data["tokens"].append({"name": name, "hash": _sha(token), "created": time.time()})
             if project:
                 self._data["projects"][cid] = project
+            if readonly:
+                self._data["readonly"].append(cid)
             self._save()
-        return {"id": cid, "name": name, "token": token, "project": project or None}
+        return {"id": cid, "name": name, "token": token, "project": project or None, "readonly": bool(readonly)}
 
     def set_project(self, cid: str, project: str | None) -> dict:
         """Zugang auf ein Projekt beschränken (oder mit None wieder für den ganzen Vault freigeben)."""
@@ -130,6 +140,22 @@ class Clients:
                 self._data["projects"].pop(cid, None)
             self._save()
         return {**entry, "project": project or None}
+
+    def set_readonly(self, cid: str, readonly: bool) -> dict:
+        """Zugang auf „nur lesen“ setzen oder wieder Schreiben erlauben (nur für in der Oberfläche angelegte)."""
+        entry = next((c for c in self.list() if c["id"] == cid), None)
+        if not entry:
+            raise KeyError(f"Zugang {cid} nicht gefunden")
+        if entry["source"] == "config":
+            raise ValueError("Zugänge aus vaultserver.toml dürfen immer schreiben – in der Oberfläche einen neuen Zugang anlegen")
+        with self._lock:
+            ro = self._data["readonly"]
+            if readonly and cid not in ro:
+                ro.append(cid)
+            elif not readonly and cid in ro:
+                ro.remove(cid)
+            self._save()
+        return {**entry, "readonly": bool(readonly)}
 
     def rename_project(self, old: str, new: str) -> int:
         """Bindungen an ein umbenanntes Projekt (auch Unter-Vaults old/…) nachziehen. Gibt die Anzahl zurück."""
@@ -147,9 +173,11 @@ class Clients:
         """Im Web angelegte Zugänge mit Hash (nie Klartext) und Projektbindung."""
         with self._lock:
             return [{"name": t["name"], "hash": t["hash"], "created": t["created"],
-                     "project": self._data["projects"].get(t["hash"][:12])} for t in self._data["tokens"]]
+                     "project": self._data["projects"].get(t["hash"][:12]),
+                     "readonly": t["hash"][:12] in self._data["readonly"]} for t in self._data["tokens"]]
 
-    def import_entry(self, name: str, hash_: str, created: float | None = None, project: str | None = None) -> str:
+    def import_entry(self, name: str, hash_: str, created: float | None = None, project: str | None = None,
+                     readonly: bool = False) -> str:
         """Zugang aus einem Export übernehmen; der Rechner behält seinen Token. Gibt das Ergebnis als Text."""
         if not NAME_RE.match(name or "") or not re.fullmatch(r"[0-9a-f]{64}", hash_ or ""):
             raise ValueError("ungültiger Eintrag")
@@ -163,6 +191,8 @@ class Clients:
             self._data["tokens"].append({"name": name, "hash": hash_, "created": created or time.time()})
             if project:
                 self._data["projects"][hash_[:12]] = project
+            if readonly:
+                self._data["readonly"].append(hash_[:12])
             self._save()
         return "übernommen"
 
@@ -174,6 +204,8 @@ class Clients:
                     self._data["tokens"].remove(t)
                     self._data["last_seen"].pop(cid, None)
                     self._data["projects"].pop(cid, None)
+                    if cid in self._data["readonly"]:
+                        self._data["readonly"].remove(cid)
                     self._save()
                     return t["name"]
             for token, name in self.config.tokens.items():
@@ -186,8 +218,9 @@ class Clients:
         raise KeyError(f"Zugang {cid} nicht gefunden")
 
     def renew(self, cid: str) -> dict:
-        """Neuer Token mit gleichem Namen und gleichem Projekt, der alte ist sofort ungültig."""
+        """Neuer Token mit gleichem Namen, gleichem Projekt und gleicher Berechtigung, der alte ist sofort ungültig."""
         with self._lock:
             project = self._data["projects"].get(cid)
+            readonly = cid in self._data["readonly"]
         name = self.revoke(cid)
-        return self.create(name, project)
+        return self.create(name, project, readonly)

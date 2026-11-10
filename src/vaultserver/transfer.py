@@ -104,11 +104,11 @@ def import_config(svc, users, data: dict, parts: list[str], passphrase: str = ""
             name = row.get("name", "")
             if dry_run:
                 note("clients", name, "gibt es schon – unverändert" if name.lower() in existing
-                     else f"wird übernommen{' (nur ' + row['project'] + ')' if row.get('project') else ''}")
+                     else f"wird übernommen{' (nur ' + row['project'] + ')' if row.get('project') else ''}{', nur lesen' if row.get('readonly') else ''}")
                 continue
             try:
                 note("clients", name, svc.clients.import_entry(name, row.get("hash", ""), row.get("created"),
-                                                               row.get("project")))
+                                                               row.get("project"), bool(row.get("readonly"))))
             except ValueError as e:
                 note("clients", name, str(e), ok=False)
     if "users" in parts:

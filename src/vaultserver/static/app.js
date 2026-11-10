@@ -902,6 +902,7 @@ function tokenDialog(out, title) {
   const t = setupTexts(out.token, out.project), e = envTexts(out.token), dlg = $("#dlg"), form = $("#dlg-form");
   form.innerHTML = `<h3>${esc(title)}: ${esc(out.name)}</h3>
     <div class="banner warn">Der Token wird <b>nur jetzt</b> angezeigt. Gleich auf dem Rechner eintragen oder sicher ablegen.</div>
+    ${out.readonly ? `<div class="banner info">Dieser Zugang darf <b>nur lesen</b>: über <code>/mcp</code> sind alle schreibenden Werkzeuge gesperrt, über <code>/api</code> gelten nur die Leseadressen (z. B. <code>/api/recent</code>, <code>/api/events</code>). Er sieht den ganzen Vault.</div>` : ""}
     ${out.project ? `<div class="banner info">Dieser Zugang gilt nur für das Projekt <b>${esc(out.project)}</b> – auch über <code>/mcp</code> sieht er nur dieses Projekt.</div>` : ""}
     <div class="setup">
       <h4>Token</h4>${codeBlock(out.token)}
@@ -915,13 +916,15 @@ function tokenDialog(out, title) {
   dlg.returnValue = ""; dlg.showModal();
 }
 
+const RW = "Lesen und Schreiben", RO = "Nur lesen";
 async function newClient(projects) {
   const r = await dialog("Neuer MCP-Zugang", [
     { name: "name", label: "Name des Rechners (erscheint in den Commits)", placeholder: "z. B. laptop-oliver", required: true },
     { name: "project", label: "Zugriff auf", type: "select", options: [ALL, ...projects.map((p) => p.name)], value: ALL },
+    { name: "access", label: "Rechte (nur lesen z. B. für Anzeigen und Auswertungen)", type: "select", options: [RW, RO], value: RW },
   ], "Anlegen");
   if (!r?.name) return;
-  try { tokenDialog(await api("POST", "/api/clients", { name: r.name, project: r.project === ALL ? null : r.project }), "Neuer Zugang"); } catch (e) { fail(e); }
+  try { tokenDialog(await api("POST", "/api/clients", { name: r.name, project: r.project === ALL ? null : r.project, readonly: r.access === RO }), "Neuer Zugang"); } catch (e) { fail(e); }
 }
 
 // ------------------------------------------------------------------ Eingebundene Repos (je Repo ein Projekt)
@@ -1121,12 +1124,13 @@ async function showSetup() {
 
     <h3>3 · Zugänge (Rechner)</h3>
     <table class="list">
-      <tr><th>Name</th><th>Zugriff auf</th><th>Herkunft</th><th>Zuletzt benutzt</th><th></th></tr>
+      <tr><th>Name</th><th>Zugriff auf</th><th>Rechte</th><th>Herkunft</th><th>Zuletzt benutzt</th><th></th></tr>
       ${d.clients.map((c) => `<tr><td><b>${esc(c.name)}</b></td>
         <td><select data-proj="${esc(c.id)}" data-name="${esc(c.name)}">${projOptions(c.project)}</select></td>
+        <td>${c.source === "config" ? RW : `<select data-ro="${esc(c.id)}" data-name="${esc(c.name)}" data-project="${esc(c.project || "")}"><option ${c.readonly ? "" : "selected"}>${RW}</option><option ${c.readonly ? "selected" : ""}>${RO}</option></select>`}</td>
         <td>${c.source === "config" ? "vaultserver.toml" : `Oberfläche, ${ago(c.created)}`}</td><td>${ago(c.last_seen)}</td>
         <td class="act"><button data-renew="${esc(c.id)}" data-name="${esc(c.name)}">Neuer Token</button> <button data-revoke="${esc(c.id)}" data-name="${esc(c.name)}">Sperren</button></td></tr>`).join("")
-        || `<tr><td colspan="5">Noch keine Zugänge.</td></tr>`}
+        || `<tr><td colspan="6">Noch keine Zugänge.</td></tr>`}
     </table>
     <p><button class="primary" id="btn-new-client">Neuen Zugang anlegen …</button>
       <span class="hp">Ein auf ein Projekt beschränkter Zugang sieht immer nur dieses Projekt, auch über <code>/mcp</code>. „Neuer Token“ ersetzt den alten sofort (z. B. wenn er bekannt geworden ist).</span></p>
@@ -1195,6 +1199,12 @@ async function showSetup() {
     try {
       await api("PUT", `/api/clients/${sel.dataset.proj}`, { project: sel.value || null });
       toast(`„${sel.dataset.name}“: ${sel.value ? `nur Projekt ${sel.value}` : "ganzer Vault"}`);
+    } catch (e) { fail(e); showSetup(); }
+  }));
+  c.querySelectorAll("[data-ro]").forEach((sel) => (sel.onchange = async () => {
+    try {
+      await api("PUT", `/api/clients/${sel.dataset.ro}`, { project: sel.dataset.project || null, readonly: sel.value === RO });
+      toast(`„${sel.dataset.name}“: ${sel.value === RO ? "darf nur lesen" : "darf lesen und schreiben"}`);
     } catch (e) { fail(e); showSetup(); }
   }));
   c.querySelectorAll("[data-revoke]").forEach((b) => (b.onclick = async () => {

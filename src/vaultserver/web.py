@@ -151,6 +151,12 @@ def git_info(config: Config, svc: Service) -> dict:
             "push": config.git_push, **svc.store.git_status}
 
 
+# Adressen, die ein Lese-Token benutzen darf (nur GET): Anzeige und Suche, Änderungsstrom, nichts zum Einrichten
+READ_API = {"/api/recent", "/api/events", "/api/tree", "/api/note", "/api/search", "/api/query", "/api/complete",
+            "/api/tasks", "/api/lint", "/api/claims", "/api/guide", "/api/projects", "/api/me"}
+READ_API_PREFIX = "/api/file/"
+
+
 def create_app(config: Config, start_background: bool = True) -> FastAPI:
     done = ensure_vault(config)
     if done:
@@ -185,8 +191,8 @@ def create_app(config: Config, start_background: bool = True) -> FastAPI:
             path = request.url.path
             auth = request.headers.get("authorization", "")
             token = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
-            found = svc.clients.lookup_full(token) if token else None
-            machine, bound = found if found else (None, None)
+            found = svc.clients.lookup_access(token) if token else None
+            machine, bound, readonly = found if found else (None, None, False)
             if path == "/mcp" or path.startswith("/mcp/"):
                 if not machine:
                     return JSONResponse({"error": "Bearer-Token fehlt oder ist ungültig"}, status_code=401)
@@ -209,6 +215,7 @@ def create_app(config: Config, start_background: bool = True) -> FastAPI:
             if route_auth == "own":   # Plug-in prüft selbst; bekannte Anmeldung trotzdem mitgeben
                 user = read_session(request.cookies.get(COOKIE, ""), key, users)
                 request.state.user = user
+                request.state.readonly = bool(machine and not user and readonly)
                 request.state.agent = f"web/{user}" if user else (f"{machine}/api" if machine else None)
                 return await call_next(request)
             if path.startswith("/api/drop/"):
@@ -219,6 +226,10 @@ def create_app(config: Config, start_background: bool = True) -> FastAPI:
                     return JSONResponse({"error": "Anmeldung erforderlich"}, status_code=401)
                 if not user and bound and path != "/api/me":
                     return JSONResponse({"error": f"Dieser Zugang gilt nur für MCP im Projekt „{bound}“"}, status_code=403)
+                if not user and readonly and not (request.method == "GET" and (path in READ_API or path.startswith(READ_API_PREFIX))):
+                    # Lese-Token: nur diese lesenden Adressen (keine Einrichtung, keine Zugänge, nichts Schreibendes)
+                    return JSONResponse({"error": "Dieser Zugang darf nur lesen und nur die Leseadressen benutzen"}, status_code=403)
+                request.state.readonly = bool(not user and readonly)
                 request.state.user = user
                 request.state.agent = f"web/{user}" if user else f"{machine}/api"
             return await call_next(request)
@@ -516,7 +527,7 @@ def create_app(config: Config, start_background: bool = True) -> FastAPI:
             project = data.get("project") or None
             if project and project not in svc.projects():
                 raise ValueError(f"Projekt „{project}“ gibt es nicht")
-            out = svc.clients.create(data.get("name", ""), project)
+            out = svc.clients.create(data.get("name", ""), project, bool(data.get("readonly")))
         except ValueError as e:
             return err(e)
         log.info("MCP-Zugang angelegt: %s (von %s)", out["name"], web_user(request))
@@ -531,9 +542,12 @@ def create_app(config: Config, start_background: bool = True) -> FastAPI:
             if project and project not in svc.projects():
                 raise ValueError(f"Projekt „{project}“ gibt es nicht")
             out = svc.clients.set_project(cid, project)
+            if "readonly" in data:
+                out = svc.clients.set_readonly(cid, bool(data["readonly"]))
         except (KeyError, ValueError) as e:
             return err(e)
-        log.info("MCP-Zugang %s: Projekt %s (von %s)", out["name"], project or "alle", web_user(request))
+        log.info("MCP-Zugang %s: Projekt %s, %s (von %s)", out["name"], project or "alle",
+                 "nur lesen" if out.get("readonly") else "lesen und schreiben", web_user(request))
         return out
 
     @app.post("/api/clients/{cid}/renew")
