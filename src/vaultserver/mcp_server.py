@@ -46,6 +46,10 @@ def agent_from(ctx: Context | None, svc: Service) -> str:
 _SCOPE: contextvars.ContextVar[Scope] = contextvars.ContextVar("vaultserver_scope", default=Scope(None))
 
 
+# Hinweis „migriert, nur lesbar“ für jedes Ergebnis (leer = normaler Betrieb); setzt build_mcp
+_NOTICE: list[str] = [""]
+
+
 def _guard(fn):
     """Konflikte und Regelverstöße als normales Ergebnis zurückgeben, damit der Agent den
     aktuellen Stand bzw. die Gründe sieht; unbekannte Pfade als Werkzeugfehler."""
@@ -54,7 +58,10 @@ def _guard(fn):
         try:
             res = fn(*a, **kw)
             warning = COMMIT_WARNING.get()
-            return {**res, "warning": warning} if warning and isinstance(res, dict) else res
+            if isinstance(res, dict):
+                extra = {k: v for k, v in (("warning", warning), ("read_only_hinweis", _NOTICE[0])) if v}
+                return {**res, **extra} if extra else res
+            return res
         except (Conflict, Rejected) as e:
             return _SCOPE.get().rel(e.as_dict())
         except KeyError as e:  # Meldung soll beim Agenten ankommen, nicht nur "Error executing tool"
@@ -65,7 +72,11 @@ def _guard(fn):
 
 
 def build_mcp(svc: Service) -> MCPServer:
-    mcp = MCPServer("vaultserver", instructions=INSTRUCTIONS, version="0.3.0")
+    cfg = svc.config
+    notice = cfg.readonly_text() if cfg.readonly else ""
+    _NOTICE[0] = notice
+    mcp = MCPServer("vaultserver", instructions=f"{notice}\n\n{INSTRUCTIONS}" if notice else INSTRUCTIONS,
+                    version="0.3.0")
     st, ix, lock = svc.store, svc.index, svc.lock
 
     def scope_of(ctx: Context | None) -> Scope:
@@ -108,6 +119,9 @@ def build_mcp(svc: Service) -> MCPServer:
         def run():
             area_in(sc, area)
             out = svc.guide(area)
+            if notice:
+                out["read_only"] = {"migrated": True, "migrated_to": cfg.readonly_target or None,
+                                    "separat_einbinden": True, "hinweis": notice}
             projects = svc.projects()
             if not sc:
                 out["groesse"] = {"weich_kb": svc.config.soft_kb, "hart_kb": svc.config.hard_kb,
@@ -388,6 +402,7 @@ def build_mcp(svc: Service) -> MCPServer:
         sc = scope_of(ctx)
 
         def run():
+            st._check_writable()   # sonst gäbe es eine Adresse, die beim Hochladen scheitert
             full = sc.full(path)
             if not PurePosixPath(full).name or st._in_bin(full):
                 raise ValueError("Ungültiger Zielpfad")
@@ -410,6 +425,7 @@ def build_mcp(svc: Service) -> MCPServer:
 
         def run():
             from .drops import fetch
+            st._check_writable()   # vor dem Abruf, sonst wird umsonst aus dem Internet geladen
             data, _ctype = fetch(url, svc.config.max_upload_mb * 1024 * 1024)
             res = st.upload(sc.full(path), data, agent_from(ctx, svc), message=message or f"Anhang aus {url[:80]}",
                             overwrite=overwrite)

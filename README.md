@@ -164,6 +164,22 @@ Schreibende Aufrufe brauchen die zuletzt gelesene Version (`base_version`). Hat 
 
 Ordnerbaum mit Ziehen und Ablegen und Kontextmenü, gerenderte Notizen mit Wikilinks, Bildern, HTML-Mockups und anklickbaren Checkboxen, Gliederung, Eigenschaften (Status direkt umschaltbar), Backlinks und Git-Verlauf. Bilder, PDFs, Mockups und andere Anhänge erscheinen im Inhaltsbereich wie eine Notiz; ein Klick auf ein Bild (auch eingebettet in einer Notiz) öffnet es in einem neuen Browser-Tab. Dazu Suche (Strg+K), Editor mit Wikilink-Vervollständigung nach `[[`, Konfliktansicht, neue FIX- und Feature-Einträge aus der Vorlage, Prüfung, Änderungsliste und Passwortänderung. Funktioniert auch auf dem Handy.
 
+## Nur-Lese-Betrieb nach einer Migration
+
+Ist der Vault auf einen neuen MCP umgezogen, schaltet `[readonly]` den alten VaultServer auf „nur lesen“:
+
+```toml
+[readonly]
+enabled = true
+target = "https://mcp.example.com/mcp/projekt"   # Adresse des neuen MCP
+message = ""                                     # optional: eigener Text
+```
+
+Schreibzugriffe über MCP und Web-Oberfläche werden abgewiesen (MCP: `error: "read_only"`, `migrated: true`,
+`migrated_to: <target>`, `separat_einbinden: true`), Lesen bleibt möglich. Auch `guide`, die MCP-Anleitung und jede
+MCP-Antwort nennen die neue Adresse. Der neue MCP wird nicht weitergeleitet, er muss in den Agenten als eigener
+MCP-Server separat eingebunden werden. Die Änderung wirkt nach einem Neustart.
+
 ## Erweiterungen (Plug-ins)
 
 Plug-ins sind eigene Python-Pakete, die sich in den laufenden Server einhängen: Routen, Hintergrunddienste,

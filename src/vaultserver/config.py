@@ -84,6 +84,11 @@ class Config:
     ollama_url: str = "http://localhost:11434"
     ollama_model: str = "nomic-embed-text"
 
+    # Nur-Lese-Schalter ([readonly]): Schreibzugriffe werden abgewiesen, Antwort nennt das neue Ziel
+    readonly: bool = False
+    readonly_target: str = ""           # Adresse des neuen MCP, auf dem die Daten jetzt liegen
+    readonly_message: str = ""          # eigener Text; leer = Standardtext
+
     # Erweiterungen: nur ausdrücklich freigeschaltete Plug-ins (Entry Points vaultserver.plugins) werden geladen
     plugins_enabled: list[str] = field(default_factory=list)
     plugin_settings: dict[str, dict] = field(default_factory=dict)   # [plugins.<name>] -> an register(ctx)
@@ -101,6 +106,7 @@ class Config:
         git = data.get("git", {})
         sem = data.get("semantic", {})
         plugins = data.get("plugins", {})
+        ro = data.get("readonly", {})
         areas = []
         for a in data.get("areas", []):
             a = dict(a)
@@ -150,6 +156,9 @@ class Config:
             semantic_enabled=sem.get("enabled", False),
             ollama_url=sem.get("ollama_url", "http://localhost:11434"),
             ollama_model=sem.get("model", "nomic-embed-text"),
+            readonly=bool(ro.get("enabled", False)),
+            readonly_target=str(ro.get("target", "")),
+            readonly_message=str(ro.get("message", "")),
             plugins_enabled=[str(n) for n in plugins.get("enabled", [])],
             plugin_settings={k: dict(v) for k, v in plugins.items() if isinstance(v, dict)},
         )
@@ -157,6 +166,16 @@ class Config:
     def __post_init__(self):
         if self.recycle_folder and self.recycle_folder not in self.exclude:
             self.exclude = [*self.exclude, self.recycle_folder]
+
+    def readonly_text(self) -> str:
+        """Hinweis für abgewiesene Schreibzugriffe und die Anleitung (guide)."""
+        if self.readonly_message:
+            return self.readonly_message
+        text = "Dieser VaultServer wurde migriert und arbeitet nur noch lesend. Alle Daten liegen auf einem neuen MCP"
+        if self.readonly_target:
+            return (f"{text}: {self.readonly_target} – er wird nicht von hier weitergeleitet, "
+                    "sondern muss als eigener MCP-Server separat eingebunden werden.")
+        return f"{text}, der separat eingebunden werden muss."
 
     def normalize_value(self, key_norm: str, value: str) -> str:
         v = " ".join(value.strip().lower().split())
