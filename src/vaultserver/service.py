@@ -217,7 +217,7 @@ class Service:
                 if self.store.dirty_push and now - last["push"] >= 10:
                     last["push"] = now
                     self.store.push()
-                if c.commit_link_minutes and now - last["links"] >= c.commit_link_minutes * 60:
+                if c.commit_link_minutes and not c.readonly and now - last["links"] >= c.commit_link_minutes * 60:
                     last["links"] = now
                     r = self.store.link_commits("vaultserver")
                     if r["updated"]:

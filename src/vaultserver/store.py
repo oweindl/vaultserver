@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import contextlib
 import contextvars
+import functools
 import hashlib
 import json
 import os
@@ -65,6 +66,27 @@ class Rejected(Exception):
 
     def as_dict(self) -> dict:
         return {"error": "rejected", "message": str(self), "problems": self.problems}
+
+
+class ReadOnly(Rejected):
+    """Der Vault ist migriert und nur noch lesbar ([readonly] in der Konfiguration)."""
+
+    def __init__(self, message: str, target: str = ""):
+        super().__init__(message)
+        self.target = target
+
+    def as_dict(self) -> dict:
+        return {"error": "read_only", "message": str(self), "migrated": True, "migrated_to": self.target or None,
+                "separat_einbinden": True}
+
+
+def writes(method):
+    """Store-Methode, die den Vault verändert: im Nur-Lese-Betrieb sofort abweisen."""
+    @functools.wraps(method)
+    def run(self, *a, **kw):
+        self._check_writable()
+        return method(self, *a, **kw)
+    return run
 
 
 @dataclass
@@ -195,7 +217,12 @@ class Store:
     def _agent_label(self, agent: str) -> str:
         return agent or "unbekannt"
 
+    def _check_writable(self) -> None:
+        if self.config.readonly:
+            raise ReadOnly(self.config.readonly_text(), self.config.readonly_target)
+
     def _write_file(self, path: str, text: str) -> None:
+        self._check_writable()   # Absicherung für Aufrufer, die nicht über die öffentlichen Methoden gehen
         full = self._abs(path)
         full.parent.mkdir(parents=True, exist_ok=True)
         tmp = full.with_name(f".{full.name}.vaultserver.tmp")
@@ -342,6 +369,7 @@ class Store:
                                   (time.time() + self.config.claim_minutes * 60, path))
             self.index.db.commit()
 
+    @writes
     @deferred
     def claim(self, path: str, agent: str, note: str = "", minutes: int | None = None,
               set_status: bool = True) -> dict:
@@ -367,6 +395,7 @@ class Store:
                                                     message=f"{PurePosixPath(path).stem} reserviert"))
             return result
 
+    @writes
     def release(self, path: str, agent: str, force: bool = False) -> dict:
         path = self._norm_path(path)
         with self.lock:
@@ -387,6 +416,7 @@ class Store:
     TEXT_SUFFIXES = {".md", ".txt", ".json", ".csv", ".tsv", ".yaml", ".yml", ".svg", ".html", ".htm", ".css",
                      ".js", ".base", ".canvas", ".xml", ".ini", ".toml"}
 
+    @writes
     @deferred
     def write(self, path: str, content: str, agent: str, base_version: str | None = None,
               message: str | None = None, force: bool = False) -> dict:
@@ -408,6 +438,7 @@ class Store:
             self._after(ev, commit, [path])
             return {"path": path, "version": self._remember(content), "commit": commit, "created": old is None}
 
+    @writes
     @deferred
     def patch_section(self, path: str, section: str | None, content: str, agent: str,
                       base_version: str | None = None, mode: str = "replace",
@@ -468,6 +499,7 @@ class Store:
             self._after(ev, commit, [path])
             return {"path": path, "version": self._remember(result), "commit": commit}
 
+    @writes
     @deferred
     def set_property(self, path: str, key: str, value: str, agent: str,
                      base_version: str | None = None, message: str | None = None,
@@ -531,6 +563,7 @@ class Store:
                     return i + 1
         return 0
 
+    @writes
     @deferred
     def delete(self, path: str, agent: str, base_version: str | None = None,
                message: str | None = None, force: bool = False) -> dict:
@@ -548,6 +581,7 @@ class Store:
             self._after(ev, commit, [path])
             return {"path": path, "deleted": True, "commit": commit}
 
+    @writes
     @deferred
     def move(self, src: str, dst: str, agent: str, message: str | None = None,
              update_links: bool = True, force: bool = False) -> dict:
@@ -648,6 +682,7 @@ class Store:
             out.append(line)
         return "\n".join(out)
 
+    @writes
     @deferred
     def upload(self, path: str, data: bytes, agent: str, message: str | None = None,
                overwrite: bool = False) -> dict:
@@ -714,7 +749,7 @@ class Store:
 
     def ensure_bin(self) -> str | None:
         """Den Papierkorb-Ordner anlegen, falls er fehlt (er muss immer da sein)."""
-        if not self.bin:
+        if not self.bin or self.config.readonly:
             return None
         commit = None
         with self.lock:
@@ -730,6 +765,7 @@ class Store:
                 commit = self._finish_raw([f"{b}/{self.KEEP}"], f"Papierkorb {b} angelegt", "vaultserver") or commit
         return commit
 
+    @writes
     @deferred
     def mkdir(self, path: str, agent: str, message: str | None = None) -> dict:
         """Neuen (leeren) Ordner anlegen; ohne Schrägstrich = neues Stammverzeichnis („neuer Vault“)."""
@@ -747,6 +783,7 @@ class Store:
             self._after(ev, commit, [f"{path}/{self.KEEP}"])
             return {"path": path, "created": True, "commit": commit}
 
+    @writes
     @deferred
     def trash(self, path: str, agent: str, base_version: str | None = None, message: str | None = None,
               force: bool = False) -> dict:
@@ -836,6 +873,7 @@ class Store:
         out.sort(key=lambda e: e["id"], reverse=True)
         return out
 
+    @writes
     @deferred
     def restore(self, entry_id: str, agent: str, message: str | None = None) -> dict:
         """Eintrag an die alte Stelle zurück. Ordner werden mit einem vorhandenen Ordner zusammengeführt;
@@ -872,6 +910,7 @@ class Store:
             return {"id": entry_id, "path": orig, "kind": meta["kind"], "restored": True, "files": len(rel_files),
                     "commit": commit}
 
+    @writes
     @deferred
     def purge(self, entry_id: str | None, agent: str) -> dict:
         """Papierkorb-Eintrag endgültig löschen (bleibt in der Git-Historie); ohne id: Papierkorb leeren."""
@@ -918,6 +957,7 @@ class Store:
                 out.append(f"- {k}: {v}")
         return "\n".join(out)
 
+    @writes
     @deferred
     def create_from_template(self, area_name: str, title: str, fields: dict[str, object], agent: str,
                              summary: str = "", body: str = "", message: str | None = None) -> dict:
@@ -1013,6 +1053,7 @@ class Store:
             rows.append({"n": n, "path": p, "title": title, "props": props})
         return rows
 
+    @writes
     def refresh_overview(self, area_name: str, agent: str) -> dict:
         area = self.config.area_by_name(area_name)
         if not area.overview:
@@ -1044,6 +1085,7 @@ class Store:
     def _strip_stamp(text: str) -> str:
         return re.sub(r"\(\d{4}-\d\d-\d\d \d\d:\d\d\)", "", text)
 
+    @writes
     def refresh_status(self, agent: str, note: str | None = None) -> dict:
         note = note or self.config.status_note
         if not note:
@@ -1084,6 +1126,7 @@ class Store:
 
     # ------------------------------------------------------------ Commit-Verknüpfung (Idee 8)
 
+    @writes
     def link_commits(self, agent: str = "vaultserver", limit: int = 2000) -> dict:
         found: dict[str, list[dict]] = {}
         with self.lock:

@@ -119,6 +119,15 @@ overview_columns = ["Status"]
 [areas.allowed]
 status = ["offen", "in arbeit", "teilweise (test)", "erledigt (test)", "abgenommen", "produktiv", "blockiert", "geplant"]
 
+# Nur-Lese-Betrieb nach einer Migration: Schreibzugriffe (MCP, Web, Hintergrundjobs) werden abgewiesen, Lesen
+# bleibt möglich. Jede Antwort und der guide nennen die Adresse des neuen MCP. Der neue MCP wird nicht
+# weitergeleitet, sondern muss in den Agenten separat als eigener MCP-Server eingebunden werden.
+# Änderung wirkt erst nach einem Neustart.
+# [readonly]
+# enabled = true
+# target = "https://mcp.example.com/mcp/projekt"    # Adresse des neuen MCP
+# message = ""                                      # optional: eigener Text statt des Standardtexts
+
 # Größenregeln (Standardwerte). Weiche Grenze: Hinweis mit Aufteilungsvorschlag beim Schreiben, Meldung in lint.
 # Harte Grenze: neue Notizen darüber werden abgelehnt. folder_notes: Hinweis auf Unterordner.
 [limits]
